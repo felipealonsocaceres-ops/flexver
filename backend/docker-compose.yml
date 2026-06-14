@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # Nuestra API en FastAPI
+  api:
+    build: .
+    volumes:
+      - .:/app  # Sincroniza tu código en tiempo real con el contenedor
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  # Servidor Redis (Necesario para WebSockets y Celery)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # Worker de Celery (Comentado por hoy hasta que creemos la estructura de carpetas)
+  # celery_worker:
+  #   build: .
+  #   command: celery -A core.celery_app worker --loglevel=info
+  #   volumes:
+  #     - .:/app
+  #   environment:
+  #     - CELERY_BROKER_URL=redis://redis:6379/0
+  #   depends_on:
+  #     - redis
