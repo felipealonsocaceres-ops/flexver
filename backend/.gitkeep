@@ -1,0 +1,3 @@
+# Carpeta reservada para el backend (FastAPI + Docker).
+# Este archivo solo existe para que Git versione la carpeta vacía.
+# Puede eliminarse cuando se agreguen los archivos reales del backend.
