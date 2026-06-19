@@ -1,31 +1,44 @@
-version: '3.8'
-
 services:
-  # Nuestra API en FastAPI
+  # 1. Tu API FastAPI
   api:
-    build: .
-    volumes:
-      - .:/app  # Sincroniza tu código en tiempo real con el contenedor
+    build: 
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    volumes:
+      - .:/app
     environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
       - REDIS_URL=redis://redis:6379/0
+      - MAPBOX_ACCESS_TOKEN=${MAPBOX_ACCESS_TOKEN}
     depends_on:
       - redis
 
-  # Servidor Redis (Necesario para WebSockets y Celery)
+  # 2. El Intermediario (Redis)
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
 
-  # Worker de Celery (Comentado por hoy hasta que creemos la estructura de carpetas)
-  # celery_worker:
-  #   build: .
-  #   command: celery -A core.celery_app worker --loglevel=info
-  #   volumes:
-  #     - .:/app
-  #   environment:
-  #     - CELERY_BROKER_URL=redis://redis:6379/0
-  #   depends_on:
-  #     - redis
+  # 3. El Trabajador en Segundo Plano (Celery)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.core.celery_app worker --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - MAPBOX_ACCESS_TOKEN=${MAPBOX_ACCESS_TOKEN}
+    depends_on:
+      - redis
+
+volumes:
+  redis_data:

@@ -7,6 +7,7 @@ que el servidor arrancó y la configuración (Supabase) se cargó correctamente.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.router import api_router
 from app.core.config import settings
 
 # --- Instancia principal con metadata de la API ---
@@ -39,3 +40,7 @@ async def health_check() -> dict[str, str | bool]:
         "status": "ok",
         "supabase_configured": bool(settings.SUPABASE_URL and settings.SUPABASE_KEY),
     }
+
+
+# --- Monta todas las rutas de la API v1 bajo /api/v1 ---
+app.include_router(api_router)
