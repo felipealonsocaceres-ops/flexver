@@ -1,10 +1,119 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { calcularTarifa, formatearPrecio } from '../lib/calcularTarifa'
 import Mapa from '../components/Mapa'
 import type { Tarifa } from '../types'
+
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
+
+interface Sugerencia {
+  place_name: string
+  center: [number, number]
+}
+
+function BuscadorDireccion({
+  placeholder,
+  onSeleccionar,
+}: {
+  placeholder: string
+  onSeleccionar: (direccion: string, lng: number, lat: number) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [sugerencias, setSugerencias] = useState<Sugerencia[]>([])
+  const [seleccionado, setSeleccionado] = useState('')
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const buscar = async (texto: string) => {
+    if (texto.length < 3) {
+      setSugerencias([])
+      return
+    }
+
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(texto)}.json?access_token=${MAPBOX_TOKEN}&country=CL&language=es&limit=5`
+
+    const res = await fetch(url)
+    const data = await res.json()
+
+    if (data.features) {
+      setSugerencias(
+        data.features.map((f: { place_name: string; center: [number, number] }) => ({
+          place_name: f.place_name,
+          center: f.center,
+        }))
+      )
+    }
+  }
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const valor = e.target.value
+    setQuery(valor)
+    setSeleccionado('')
+
+    if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    timeoutRef.current = setTimeout(() => buscar(valor), 400)
+  }
+
+  const handleSeleccionar = (sug: Sugerencia) => {
+    setQuery(sug.place_name)
+    setSeleccionado(sug.place_name)
+    setSugerencias([])
+    onSeleccionar(sug.place_name, sug.center[0], sug.center[1])
+  }
+
+  return (
+    <div style={{ position: 'relative', marginBottom: '16px' }}>
+      <input
+        type="text"
+        placeholder={placeholder}
+        value={query}
+        onChange={handleChange}
+        style={{
+          width: '100%',
+          padding: '10px',
+          boxSizing: 'border-box',
+          border: seleccionado ? '2px solid #22c55e' : '1px solid #d1d5db',
+          borderRadius: '8px',
+          fontSize: '14px',
+        }}
+      />
+
+      {sugerencias.length > 0 && (
+        <div style={{
+          position: 'absolute',
+          top: '100%',
+          left: 0,
+          right: 0,
+          background: 'white',
+          border: '1px solid #e5e7eb',
+          borderRadius: '8px',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+          zIndex: 1000,
+          overflow: 'hidden',
+        }}>
+          {sugerencias.map((sug, i) => (
+            <div
+              key={i}
+              onClick={() => handleSeleccionar(sug)}
+              style={{
+                padding: '10px 14px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                borderBottom: i < sugerencias.length - 1 ? '1px solid #f3f4f6' : 'none',
+                color: '#374151',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f9fafb')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              {sug.place_name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function SolicitarFlete() {
   const { user } = useAuth()
@@ -56,7 +165,8 @@ export default function SolicitarFlete() {
     return Math.round(R * c * 10) / 10
   }
 
-  const handleSeleccionarOrigen = (lng: number, lat: number) => {
+  const handleSeleccionarOrigen = (dir: string, lng: number, lat: number) => {
+    setOrigenDir(dir)
     setOrigenLat(lat)
     setOrigenLng(lng)
     if (destinoLat && destinoLng) {
@@ -64,7 +174,24 @@ export default function SolicitarFlete() {
     }
   }
 
-  const handleSeleccionarDestino = (lng: number, lat: number) => {
+  const handleSeleccionarDestino = (dir: string, lng: number, lat: number) => {
+    setDestinoDir(dir)
+    setDestinoLat(lat)
+    setDestinoLng(lng)
+    if (origenLat && origenLng) {
+      setDistancia(calcularDistancia(origenLat, origenLng, lat, lng))
+    }
+  }
+
+  const handleMapaOrigen = (lng: number, lat: number) => {
+    setOrigenLat(lat)
+    setOrigenLng(lng)
+    if (destinoLat && destinoLng) {
+      setDistancia(calcularDistancia(lat, lng, destinoLat, destinoLng))
+    }
+  }
+
+  const handleMapaDestino = (lng: number, lat: number) => {
     setDestinoLat(lat)
     setDestinoLng(lng)
     if (origenLat && origenLng) {
@@ -108,10 +235,21 @@ export default function SolicitarFlete() {
     ? calcularTarifa(tarifa, distancia, volumen)
     : null
 
+  const botonStyle = (activo: boolean) => ({
+    padding: '12px',
+    background: activo ? '#2563eb' : '#e5e7eb',
+    color: activo ? 'white' : '#6b7280',
+    border: 'none',
+    borderRadius: '8px',
+    cursor: activo ? 'pointer' : 'not-allowed',
+    fontWeight: 'bold' as const,
+  })
+
   return (
     <div style={{ maxWidth: '700px', margin: '40px auto', padding: '20px', fontFamily: 'sans-serif' }}>
-      <h1>🚚 Solicitar Flete</h1>
+      <h1 style={{ marginBottom: '24px' }}>Solicitar Flete</h1>
 
+      {/* Indicador de pasos */}
       <div style={{ display: 'flex', gap: '10px', marginBottom: '30px' }}>
         {[1, 2, 3].map((p) => (
           <div
@@ -131,68 +269,58 @@ export default function SolicitarFlete() {
         ))}
       </div>
 
+      {/* PASO 1 - Origen */}
       {paso === 1 && (
         <div>
-          <h2>📍 Selecciona el punto de origen</h2>
-          <p style={{ color: '#6b7280' }}>Haz clic en el mapa para marcar el origen</p>
+          <h2>Punto de origen</h2>
+          <p style={{ color: '#6b7280', fontSize: '14px' }}>
+            Busca la direccion o haz clic en el mapa
+          </p>
 
-          <input
-            type="text"
-            placeholder="Descripción del origen (ej: Ferretería Central, Santiago)"
-            value={origenDir}
-            onChange={(e) => setOrigenDir(e.target.value)}
-            style={{ width: '100%', padding: '10px', marginBottom: '16px', boxSizing: 'border-box' }}
+          <BuscadorDireccion
+            placeholder="Buscar direccion de origen (ej: Ferreteria Central, Santiago)"
+            onSeleccionar={handleSeleccionarOrigen}
           />
 
           <Mapa
             modo="origen"
-            onSeleccionarOrigen={handleSeleccionarOrigen}
+            onSeleccionarOrigen={handleMapaOrigen}
             origenLat={origenLat ?? undefined}
             origenLng={origenLng ?? undefined}
           />
 
           {origenLat && (
-            <p style={{ color: '#22c55e', marginTop: '10px' }}>
-              ✅ Origen seleccionado: {origenLat.toFixed(4)}, {origenLng?.toFixed(4)}
+            <p style={{ color: '#22c55e', marginTop: '10px', fontSize: '13px' }}>
+              Origen seleccionado: {origenDir || `${origenLat.toFixed(4)}, ${origenLng?.toFixed(4)}`}
             </p>
           )}
 
           <button
             onClick={() => setPaso(2)}
-            disabled={!origenLat || !origenDir}
-            style={{
-              marginTop: '20px',
-              width: '100%',
-              padding: '12px',
-              background: origenLat && origenDir ? '#2563eb' : '#e5e7eb',
-              color: origenLat && origenDir ? 'white' : '#6b7280',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: origenLat && origenDir ? 'pointer' : 'not-allowed',
-              fontWeight: 'bold',
-            }}
+            disabled={!origenLat}
+            style={{ marginTop: '20px', width: '100%', ...botonStyle(!!origenLat) }}
           >
-            Siguiente →
+            Siguiente
           </button>
         </div>
       )}
 
+      {/* PASO 2 - Destino */}
       {paso === 2 && (
         <div>
-          <h2>🏁 Selecciona el punto de destino</h2>
-          <p style={{ color: '#6b7280' }}>Haz clic en el mapa para marcar el destino</p>
+          <h2>Punto de destino</h2>
+          <p style={{ color: '#6b7280', fontSize: '14px' }}>
+            Busca la direccion o haz clic en el mapa
+          </p>
 
-          <input
-            type="text"
-            placeholder="Descripción del destino (ej: Obra en construcción, Maipú)"
-            value={destinoDir}
-            onChange={(e) => setDestinoDir(e.target.value)}
-            style={{ width: '100%', padding: '10px', marginBottom: '16px', boxSizing: 'border-box' }}
+          <BuscadorDireccion
+            placeholder="Buscar direccion de destino (ej: Obra en construccion, Maipu)"
+            onSeleccionar={handleSeleccionarDestino}
           />
 
           <Mapa
             modo="destino"
-            onSeleccionarDestino={handleSeleccionarDestino}
+            onSeleccionarDestino={handleMapaDestino}
             origenLat={origenLat ?? undefined}
             origenLng={origenLng ?? undefined}
             destinoLat={destinoLat ?? undefined}
@@ -200,14 +328,14 @@ export default function SolicitarFlete() {
           />
 
           {destinoLat && (
-            <p style={{ color: '#22c55e', marginTop: '10px' }}>
-               Destino seleccionado: {destinoLat.toFixed(4)}, {destinoLng?.toFixed(4)}
+            <p style={{ color: '#22c55e', marginTop: '10px', fontSize: '13px' }}>
+              Destino seleccionado: {destinoDir || `${destinoLat.toFixed(4)}, ${destinoLng?.toFixed(4)}`}
             </p>
           )}
 
           {distancia > 0 && (
-            <p style={{ color: '#2563eb', fontWeight: 'bold' }}>
-              📏 Distancia aproximada: {distancia} km
+            <p style={{ color: '#2563eb', fontWeight: 'bold', fontSize: '14px' }}>
+              Distancia aproximada: {distancia} km
             </p>
           )}
 
@@ -216,52 +344,48 @@ export default function SolicitarFlete() {
               onClick={() => setPaso(1)}
               style={{ flex: 1, padding: '12px', border: '1px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer' }}
             >
-              ← Volver
+              Volver
             </button>
             <button
               onClick={() => setPaso(3)}
-              disabled={!destinoLat || !destinoDir}
-              style={{
-                flex: 2,
-                padding: '12px',
-                background: destinoLat && destinoDir ? '#2563eb' : '#e5e7eb',
-                color: destinoLat && destinoDir ? 'white' : '#6b7280',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: destinoLat && destinoDir ? 'pointer' : 'not-allowed',
-                fontWeight: 'bold',
-              }}
+              disabled={!destinoLat}
+              style={{ flex: 2, ...botonStyle(!!destinoLat) }}
             >
-              Siguiente →
+              Siguiente
             </button>
           </div>
         </div>
       )}
 
+      {/* PASO 3 - Carga */}
       {paso === 3 && (
         <div>
-          <h2>📦 Descripción de la carga</h2>
+          <h2>Descripcion de la carga</h2>
 
           <div style={{ marginBottom: '16px' }}>
-            <label>Descripción de la carga</label>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 'bold' }}>
+              Descripcion
+            </label>
             <textarea
-              placeholder="Ej: Sacos de cemento, materiales de construcción, etc."
+              placeholder="Ej: Sacos de cemento, materiales de construccion"
               value={descripcion}
               onChange={(e) => setDescripcion(e.target.value)}
               rows={3}
-              style={{ width: '100%', padding: '10px', marginTop: '6px', boxSizing: 'border-box' }}
+              style={{ width: '100%', padding: '10px', boxSizing: 'border-box', borderRadius: '8px', border: '1px solid #d1d5db' }}
             />
           </div>
 
           <div style={{ marginBottom: '16px' }}>
-            <label>Volumen aproximado (m³)</label>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 'bold' }}>
+              Volumen aproximado (m3)
+            </label>
             <input
               type="number"
               min={0}
               step={0.1}
               value={volumen}
               onChange={(e) => setVolumen(parseFloat(e.target.value) || 0)}
-              style={{ width: '100%', padding: '10px', marginTop: '6px', boxSizing: 'border-box' }}
+              style={{ width: '100%', padding: '10px', boxSizing: 'border-box', borderRadius: '8px', border: '1px solid #d1d5db' }}
             />
           </div>
 
@@ -271,29 +395,29 @@ export default function SolicitarFlete() {
               border: '1px solid #bae6fd',
               borderRadius: '8px',
               padding: '16px',
-              marginBottom: '20px'
+              marginBottom: '20px',
             }}>
-              <h3 style={{ margin: '0 0 10px 0', color: '#0369a1' }}>💰 Cotización estimada</h3>
-              <p style={{ margin: '4px 0' }}>📍 Distancia: {distancia} km</p>
-              <p style={{ margin: '4px 0' }}>📦 Volumen: {volumen} m³</p>
-              <p style={{ margin: '4px 0' }}>🏷️ Precio base: {formatearPrecio(tarifa.precio_base)}</p>
-              <p style={{ margin: '4px 0' }}>🛣️ Por distancia: {formatearPrecio(tarifa.precio_por_km * distancia)}</p>
-              <p style={{ margin: '4px 0' }}>📦 Por volumen: {formatearPrecio(tarifa.precio_por_m3 * volumen)}</p>
-              <hr />
-              <p style={{ margin: '8px 0 0 0', fontWeight: 'bold', fontSize: '18px', color: '#0369a1' }}>
+              <h3 style={{ margin: '0 0 10px 0', color: '#0369a1', fontSize: '15px' }}>Cotizacion estimada</h3>
+              <p style={{ margin: '4px 0', fontSize: '13px' }}>Distancia: {distancia} km</p>
+              <p style={{ margin: '4px 0', fontSize: '13px' }}>Volumen: {volumen} m3</p>
+              <p style={{ margin: '4px 0', fontSize: '13px' }}>Precio base: {formatearPrecio(tarifa.precio_base)}</p>
+              <p style={{ margin: '4px 0', fontSize: '13px' }}>Por distancia: {formatearPrecio(tarifa.precio_por_km * distancia)}</p>
+              <p style={{ margin: '4px 0', fontSize: '13px' }}>Por volumen: {formatearPrecio(tarifa.precio_por_m3 * volumen)}</p>
+              <hr style={{ border: 'none', borderTop: '1px solid #bae6fd', margin: '10px 0' }} />
+              <p style={{ margin: 0, fontWeight: 'bold', fontSize: '16px', color: '#0369a1' }}>
                 Total: {formatearPrecio(montoCotizado)}
               </p>
             </div>
           )}
 
-          {error && <p style={{ color: 'red' }}>{error}</p>}
+          {error && <p style={{ color: 'red', fontSize: '13px' }}>{error}</p>}
 
           <div style={{ display: 'flex', gap: '10px' }}>
             <button
               onClick={() => setPaso(2)}
               style={{ flex: 1, padding: '12px', border: '1px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer' }}
             >
-              ← Volver
+              Volver
             </button>
             <button
               onClick={handleSubmit}
@@ -309,7 +433,7 @@ export default function SolicitarFlete() {
                 fontWeight: 'bold',
               }}
             >
-              {loading ? 'Solicitando...' : '✅ Confirmar solicitud'}
+              {loading ? 'Solicitando...' : 'Confirmar solicitud'}
             </button>
           </div>
         </div>
