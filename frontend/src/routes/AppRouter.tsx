@@ -1,3 +1,4 @@
+import SolicitarFlete from '../pages/SolicitarFlete';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import RoleGuard from './RoleGuard';
 
@@ -20,6 +21,7 @@ const AppRouter = () => {
       {/* Rutas Protegidas - Cliente */}
       <Route element={<RoleGuard allowedRoles={['cliente']} />}>
         <Route path="/home" element={<Home />} />
+        <Route path="/solicitar" element={<SolicitarFlete />} />
       </Route>
 
       {/* Rutas Protegidas - Conductor */}
