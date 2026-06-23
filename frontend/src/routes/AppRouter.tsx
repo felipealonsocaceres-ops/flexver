@@ -6,6 +6,7 @@ import RoleGuard from './RoleGuard';
 import Login from '../pages/Login';
 import Register from '../pages/Register';
 import Home from '../pages/Home';
+import Pago from '../pages/Pago'
 
 // Placeholders para las vistas que construiremos luego
 const PanelConductor = () => <div>Panel del Conductor (En construcción)</div>;
@@ -22,6 +23,8 @@ const AppRouter = () => {
       <Route element={<RoleGuard allowedRoles={['cliente']} />}>
         <Route path="/home" element={<Home />} />
         <Route path="/solicitar" element={<SolicitarFlete />} />
+        <Route path="/pago" element={<Pago />} />
+        <Route path="/pago/confirmar" element={<Pago />} />
       </Route>
 
       {/* Rutas Protegidas - Conductor */}
