@@ -69,7 +69,7 @@ export default function Register() {
 
         {/* Logo y título */}
         <div className="text-center mb-8">
-          <div className="text-6xl mb-4"></div>
+          <div className="text-6xl mb-4">🚚</div>
           <h1 className="text-4xl font-bold text-white tracking-tight">FlexVer</h1>
           <p className="text-slate-400 mt-2 text-sm">Logística de última milla</p>
         </div>
@@ -154,7 +154,7 @@ export default function Register() {
                   }}
                   className="py-3 rounded-lg border text-white font-medium transition-all text-sm"
                 >
-                   Cliente
+                  🏪 Cliente
                 </button>
                 <button
                   type="button"
@@ -165,7 +165,7 @@ export default function Register() {
                   }}
                   className="py-3 rounded-lg border text-white font-medium transition-all text-sm"
                 >
-                   Conductor
+                  🚛 Conductor
                 </button>
               </div>
             </div>
