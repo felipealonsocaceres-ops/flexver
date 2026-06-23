@@ -208,7 +208,7 @@ export default function SolicitarFlete() {
 
     const monto = calcularTarifa(tarifa, distancia, volumen)
 
-    const { error } = await supabase.from('fletes').insert({
+    const { data, error } = await supabase.from('fletes').insert({
       id_usuario: user.id,
       id_tarifa: tarifa.id_tarifa,
       origen_direccion: origenDir,
@@ -221,7 +221,7 @@ export default function SolicitarFlete() {
       distancia_km: distancia,
       monto_total: monto,
       estado: 'pendiente',
-    })
+    }).select()
 
     if (error) {
       setError(error.message)
@@ -230,7 +230,12 @@ export default function SolicitarFlete() {
     }
 
     setLoading(false)
-    navigate('/home')
+    navigate('/pago', {
+      state: {
+        id_flete: data[0].id_flete,
+        monto: monto,
+      }
+    })
   }
 
   const montoCotizado = tarifa && distancia > 0
