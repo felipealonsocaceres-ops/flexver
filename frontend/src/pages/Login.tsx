@@ -30,7 +30,8 @@ export default function Login() {
 
   return (
     <div style={{ maxWidth: '400px', margin: '60px auto', padding: '20px', fontFamily: 'sans-serif' }}>
-      <h1>Iniciar Sesión - FlexVer</h1>
+      <h1>Iniciar Sesión</h1>
+      <h1>FlexVer</h1>
       <form onSubmit={handleLogin}>
         <div style={{ marginBottom: '12px' }}>
           <label>Email</label>
