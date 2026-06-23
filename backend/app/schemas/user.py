@@ -47,6 +47,14 @@ class UserCreate(UserBase):
     password: str = Field(..., min_length=6, max_length=72)
 
 
+class ClientProfileCreate(UserCreate):
+    """Datos de entrada para registrar un usuario con rol 'cliente'.
+
+    Extiende `UserCreate` y fuerza `rol` a 'cliente' para que la creación del perfil sea coherente.
+    """
+    rol: Rol = Field(default=Rol.CLIENTE, frozen=True)
+
+
 class DriverProfileCreate(UserCreate):
     """Datos de entrada para registrar un usuario con rol 'conductor'.
 

@@ -11,7 +11,7 @@ from supabase import Client
 
 from app.infrastructure.supabase_client import get_supabase_client
 from app.repositories.user_repository import UserRepository
-from app.schemas.user import DriverProfileCreate, UserResponse
+from app.schemas.user import ClientProfileCreate, DriverProfileCreate, UserResponse
 from app.services.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["Usuarios"])
@@ -36,14 +36,25 @@ ServiceDep = Annotated[UserService, Depends(get_user_service)]
 
 
 @router.post(
-    "/register",
+    "/driver",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Registra un conductor (endpoint exclusivo del dominio Conductores)",
+    summary="Registra un conductor",
 )
-def register(payload: DriverProfileCreate, service: ServiceDep) -> UserResponse:
+def register_driver(payload: DriverProfileCreate, service: ServiceDep) -> UserResponse:
     """Recibe los datos del conductor y delega la orquestación al servicio."""
     return service.register_driver(payload)
+
+
+@router.post(
+    "/client",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registra un cliente",
+)
+def register_client(payload: ClientProfileCreate, service: ServiceDep) -> UserResponse:
+    """Recibe los datos del cliente y delega la orquestación al servicio."""
+    return service.register_client(payload)
 
 
 @router.get(

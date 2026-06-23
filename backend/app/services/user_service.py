@@ -8,7 +8,7 @@ del repositorio. La capa de API no contiene esta lógica; solo invoca al servici
 from fastapi import HTTPException, status
 
 from app.repositories.user_repository import UserRepository
-from app.schemas.user import DriverProfileCreate, Rol, UserResponse
+from app.schemas.user import ClientProfileCreate, DriverProfileCreate, Rol, UserResponse
 
 
 class UserService:
@@ -19,18 +19,7 @@ class UserService:
         self._repository = repository
 
     def register_driver(self, data: DriverProfileCreate) -> UserResponse:
-        """Registra un conductor: identidad, perfil de usuario y perfil de conductor.
-
-        Este endpoint es exclusivo para conductores. Si llega un rol distinto,
-        se rechaza con 400 antes de tocar la base de datos.
-
-        Flujo:
-        1. Crea la identidad en Supabase Auth (obtiene el `id`).
-        2. Inserta el perfil en `usuarios` con ese mismo `id`.
-        3. Inserta el perfil en `conductores`.
-
-        Cualquier fallo de la base de datos se traduce a HTTPException 502/409.
-        """
+        """Registra un conductor: identidad, perfil de usuario y perfil de conductor."""
         if data.rol is not Rol.CONDUCTOR:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -67,6 +56,40 @@ class UserService:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Error al registrar el usuario: {exc}",
+            ) from exc
+
+        return UserResponse.model_validate(created)
+
+    def register_client(self, data: ClientProfileCreate) -> UserResponse:
+        """Registra un cliente: identidad y perfil de usuario."""
+        if data.rol is not Rol.CLIENTE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este endpoint es exclusivo para el registro de clientes.",
+            )
+
+        try:
+            # 1. Crear en Supabase Auth
+            user_id = self._repository.create_auth_user(data.email, data.password)
+
+            # 2. Crear en tabla usuarios (NO toca la tabla conductores)
+            profile = {
+                "id_usuario": user_id,
+                "nombre_completo": data.nombre_completo,
+                "email": data.email,
+                "telefono": data.telefono,
+                "rol": data.rol.value,
+            }
+            created = self._repository.create_user_profile(profile)
+
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - frontera con Supabase
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Error al registrar el cliente: {exc}",
             ) from exc
 
         return UserResponse.model_validate(created)
