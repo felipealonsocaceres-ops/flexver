@@ -30,8 +30,15 @@ class UserBase(BaseModel):
     `email` usa `EmailStr` (requiere `pydantic[email]`) para validación estricta.
     """
 
-    # Regex para permitir solo letras y espacios. Bloquea "sjjsksjks 123"
-    nombre_completo: str = Field(..., min_length=2, max_length=120, pattern=r"^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$")
+    # Permite letras (con tildes/ñ/ü), apóstrofos y guiones intermedios
+    # (ej. "D'Angelo", "Anne-Marie"). Exige iniciar con letra, por lo que
+    # bloquea cadenas de solo espacios y entradas como "sjjsksjks 123".
+    nombre_completo: str = Field(
+        ...,
+        min_length=2,
+        max_length=120,
+        pattern=r"^[a-zA-ZáéíóúüÁÉÍÓÚÜñÑ]+(?:[ '\-][a-zA-ZáéíóúüÁÉÍÓÚÜñÑ]+)*$",
+    )
     email: EmailStr
     telefono: str | None = Field(default=None, max_length=20)
     rol: Rol = Field(default=Rol.CLIENTE)
@@ -58,22 +65,20 @@ class ClientProfileCreate(UserCreate):
 class DriverProfileCreate(UserCreate):
     """Datos de entrada para registrar un usuario con rol 'conductor'.
 
-    Extiende `UserCreate` con los campos reales de la tabla `conductores`.
     Fuerza `rol` a 'conductor' para que la creación del perfil sea coherente.
+    Solo acepta los datos de identidad y las URLs de los documentos subidos.
     """
 
     rol: Rol = Field(default=Rol.CONDUCTOR, frozen=True)
     rut: str = Field(..., min_length=8, max_length=12)
-    estado_verificacion: str = Field(default="pendiente", max_length=20)
-    disponible: bool = Field(default=False)
-    latitud_actual: float | None = Field(default=None, ge=-90.0, le=90.0)
-    longitud_actual: float | None = Field(default=None, ge=-180.0, le=180.0)
+    url_carnet_frontal: str | None = Field(default=None)
+    url_carnet_reverso: str | None = Field(default=None)
+    url_licencia: str | None = Field(default=None)
 
     @field_validator('rut')
     @classmethod
     def validar_rut_chileno(cls, v: str) -> str:
         """Valida que el RUT sea matemáticamente correcto en Chile."""
-        # 1. Limpiar puntos y guiones
         rut_limpio = v.replace(".", "").replace("-", "").upper()
         if len(rut_limpio) < 8:
             raise ValueError('El RUT es demasiado corto')
@@ -81,11 +86,13 @@ class DriverProfileCreate(UserCreate):
         cuerpo = rut_limpio[:-1]
         dv_ingresado = rut_limpio[-1]
 
-        # 2. Bloquear RUTs de prueba absurdos (ej: 1111111-1)
+        # Validar que el cuerpo contenga solo dígitos antes de operar con int()
+        if not cuerpo.isdigit():
+            raise ValueError('El cuerpo del RUT debe contener solo números')
+
         if len(set(cuerpo)) == 1:
             raise ValueError('RUT genérico o de prueba no permitido')
 
-        # 3. Algoritmo Módulo 11
         suma = 0
         multiplo = 2
         for char in reversed(cuerpo):

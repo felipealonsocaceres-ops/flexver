@@ -49,9 +49,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
-      await cargarRol(session)
+      // No usar await aquí: liberamos el lock de Supabase antes de hacer
+      // otra consulta. Diferir con setTimeout(0) evita el deadlock que
+      // dejaba colgado a signInWithPassword.
+      setTimeout(() => { cargarRol(session) }, 0)
     })
 
     return () => subscription.unsubscribe()

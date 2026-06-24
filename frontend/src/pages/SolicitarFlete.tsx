@@ -183,17 +183,19 @@ export default function SolicitarFlete() {
     }
   }
 
-  const handleMapaOrigen = (lng: number, lat: number) => {
+  const handleMapaOrigen = (lng: number, lat: number, direccion?: string) => {
     setOrigenLat(lat)
     setOrigenLng(lng)
+    if (direccion) setOrigenDir(direccion)
     if (destinoLat && destinoLng) {
       setDistancia(calcularDistancia(lat, lng, destinoLat, destinoLng))
     }
   }
 
-  const handleMapaDestino = (lng: number, lat: number) => {
+  const handleMapaDestino = (lng: number, lat: number, direccion?: string) => {
     setDestinoLat(lat)
     setDestinoLng(lng)
+    if (direccion) setDestinoDir(direccion)
     if (origenLat && origenLng) {
       setDistancia(calcularDistancia(origenLat, origenLng, lat, lng))
     }

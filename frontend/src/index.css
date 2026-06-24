@@ -9,6 +9,55 @@
   --radius-flexver: 8px;
 }
 
+/* Fondo "aurora": gradiente violeta→azul que se desplaza suavemente.
+   Animamos solo background-position (barato para el GPU). */
+@keyframes auroraShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.aurora-gradient {
+  background: linear-gradient(
+    125deg,
+    #0a0e1a 0%,
+    #251466 20%,
+    #0a0e1a 40%,
+    #122c66 62%,
+    #3a1675 80%,
+    #0a0e1a 100%
+  );
+  background-size: 300% 300%;
+  animation: auroraShift 22s ease-in-out infinite;
+}
+
+/* Haz cónico girando: barre la pantalla con luces violeta/azul. */
+@keyframes auroraRotate {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+.aurora-beams {
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    rgba(139, 92, 246, 0.18) 55deg,
+    transparent 130deg,
+    rgba(26, 115, 232, 0.16) 210deg,
+    transparent 290deg,
+    rgba(139, 92, 246, 0.14) 345deg,
+    transparent 360deg
+  );
+  filter: blur(50px);
+  animation: auroraRotate 38s linear infinite;
+}
+
+/* Respetamos a quienes prefieren menos movimiento. */
+@media (prefers-reduced-motion: reduce) {
+  .aurora-gradient,
+  .aurora-beams { animation: none; }
+}
+
 /* Configuración global optimizada para el Dark Mode */
 body {
   /* Fondo oscuro elegante */

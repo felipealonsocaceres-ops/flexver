@@ -11,12 +11,12 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.1",
-    "@types/mapbox-gl": "^3.4.1",
     "framer-motion": "^12.40.0",
     "lucide-react": "^1.21.0",
     "mapbox-gl": "^3.25.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "react-map-gl": "^8.1.1",
     "react-router-dom": "^7.17.0"
   },
   "devDependencies": {

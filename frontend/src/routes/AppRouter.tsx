@@ -6,9 +6,9 @@ import RoleGuard from './RoleGuard';
 import Login from '../pages/Login';
 import Register from '../pages/Register';
 import Home from '../pages/Home';
+import PanelConductor from '../pages/PanelConductor';
 
-// Placeholders para las vistas que construiremos luego
-const PanelConductor = () => <div>Panel del Conductor (En construcción)</div>;
+// Placeholder para las vistas que construiremos luego
 const PanelAdmin = () => <div>Panel de Administración (En construcción)</div>;
 
 const AppRouter = () => {
