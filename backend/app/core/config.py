@@ -26,7 +26,29 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = Field(..., description="URL base del proyecto Supabase")
     SUPABASE_KEY: str = Field(..., description="API key (service_role o anon) de Supabase")
 
-    # Carga el .env desde la raíz de /backend e ignora variables no declaradas.
+    # --- Mapbox ---
+    MAPBOX_ACCESS_TOKEN: str = Field(default="", description="Token de acceso Mapbox")
+
+    # --- Transbank Webpay Plus ---
+    TRANSBANK_COMMERCE_CODE: str = Field(
+        default="597055555532",
+        description="Codigo de comercio Transbank (Sandbox por defecto)"
+    )
+    TRANSBANK_API_KEY: str = Field(
+        default="579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C",
+        description="API Key Transbank (Sandbox por defecto)"
+    )
+    TRANSBANK_AMBIENTE: str = Field(
+        default="integration",
+        description="Ambiente Transbank: integration o production"
+    )
+
+    # --- Frontend ---
+    FRONTEND_URL: str = Field(
+        default="http://localhost:5173",
+        description="URL base del frontend para CORS y redirects"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

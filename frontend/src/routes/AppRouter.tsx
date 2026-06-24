@@ -1,12 +1,12 @@
-import SolicitarFlete from '../pages/SolicitarFlete';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import RoleGuard from './RoleGuard';
 
 // Importación de tus páginas actuales
 import Login from '../pages/Login';
 import Register from '../pages/Register';
-import Home from '../pages/Home';
+import PanelCliente from '../pages/PanelCliente';
 import PanelConductor from '../pages/PanelConductor';
+import Pago from '../pages/Pago'
 
 // Placeholder para las vistas que construiremos luego
 const PanelAdmin = () => <div>Panel de Administración (En construcción)</div>;
@@ -20,8 +20,11 @@ const AppRouter = () => {
 
       {/* Rutas Protegidas - Cliente */}
       <Route element={<RoleGuard allowedRoles={['cliente']} />}>
-        <Route path="/home" element={<Home />} />
-        <Route path="/solicitar" element={<SolicitarFlete />} />
+        <Route path="/home" element={<PanelCliente />} />
+        {/* Compat: el wizard ahora vive dentro del panel del cliente */}
+        <Route path="/solicitar" element={<Navigate to="/home" replace />} />
+        <Route path="/pago" element={<Pago />} />
+        <Route path="/pago/confirmar" element={<Pago />} />
       </Route>
 
       {/* Rutas Protegidas - Conductor */}

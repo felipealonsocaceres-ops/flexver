@@ -1,9 +1,20 @@
 import os
+from typing import Optional
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from supabase import create_client, Client
 from app.schemas.freight import FreightCreate, FreightUpdate, FreightResponse, EstadoFlete
 
 router = APIRouter()
+
+
+class ConductorPublico(BaseModel):
+    """Datos públicos del conductor que ve el cliente cuando le asignan el viaje."""
+    nombre: str
+    telefono: Optional[str] = None
+    rut: Optional[str] = None
+    calificacion: Optional[float] = None
+    total_calificaciones: int = 0
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -64,3 +75,59 @@ async def actualizar_estado_flete(id_flete: str, payload: FreightUpdate):
     # 5. Guardar cambios en la BD
     respuesta = supabase.table("fletes").update(actualizacion).eq("id_flete", id_flete).execute()
     return respuesta.data[0]
+
+
+@router.get("/{id_flete}/conductor", response_model=ConductorPublico)
+async def obtener_conductor_del_flete(id_flete: str):
+    """Devuelve los datos públicos del conductor asignado a un flete.
+
+    Corre con el cliente service-role del backend, por lo que NO depende de las
+    políticas RLS (un cliente no puede leer la fila del conductor directamente).
+    """
+    flete = supabase.table("fletes").select("id_conductor").eq("id_flete", id_flete).execute()
+    if not flete.data:
+        raise HTTPException(status_code=404, detail="Flete no encontrado")
+
+    id_conductor = flete.data[0].get("id_conductor")
+    if not id_conductor:
+        raise HTTPException(status_code=404, detail="El flete aún no tiene conductor asignado")
+
+    cond = (
+        supabase.table("conductores")
+        .select("id_usuario, rut")
+        .eq("id_conductor", id_conductor)
+        .execute()
+    )
+    if not cond.data:
+        raise HTTPException(status_code=404, detail="Conductor no encontrado")
+
+    id_usuario = cond.data[0].get("id_usuario")
+    nombre, telefono = "Conductor", None
+    if id_usuario:
+        usuario = (
+            supabase.table("usuarios")
+            .select("nombre_completo, telefono")
+            .eq("id_usuario", id_usuario)
+            .execute()
+        )
+        if usuario.data:
+            nombre = usuario.data[0].get("nombre_completo") or "Conductor"
+            telefono = usuario.data[0].get("telefono")
+
+    # Promedio de calificaciones del conductor.
+    cals = (
+        supabase.table("calificaciones")
+        .select("puntaje")
+        .eq("id_conductor", id_conductor)
+        .execute()
+    )
+    puntajes = [c["puntaje"] for c in (cals.data or []) if c.get("puntaje") is not None]
+    promedio = round(sum(puntajes) / len(puntajes), 1) if puntajes else None
+
+    return ConductorPublico(
+        nombre=nombre,
+        telefono=telefono,
+        rut=cond.data[0].get("rut"),
+        calificacion=promedio,
+        total_calificaciones=len(puntajes),
+    )

@@ -1,0 +1,8 @@
+{
+  // Tailwind v4 usa directivas (@theme, @apply, @tailwind...) que el
+  // validador de CSS nativo de VS Code no reconoce. Las ignoramos para
+  // evitar falsos "Unknown at rule".
+  "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "less.lint.unknownAtRules": "ignore"
+}

@@ -138,6 +138,7 @@ export default function Login() {
         transition={{ duration: 0.5, ease: 'easeOut' }}
         className="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur-2xl p-7 sm:p-8 shadow-2xl shadow-black/50 ring-1 ring-white/5"
       >
+        {/* Logo y titulo */}
         <div className="text-center mb-8">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-linear-to-br from-primario to-secundario shadow-lg shadow-primario/30">
             <LogIn className="h-6 w-6 text-white" />
@@ -204,6 +205,10 @@ export default function Login() {
             </Link>
           </p>
         </div>
+
+        <p className="text-center text-xs text-slate-600 mt-6">
+          2025 FlexVer — Todos los derechos reservados
+        </p>
       </motion.div>
     </div>
   )

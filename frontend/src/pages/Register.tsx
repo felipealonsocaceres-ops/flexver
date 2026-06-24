@@ -83,12 +83,12 @@ function AuroraBackground() {
 
       {/* Orbes flotantes con pulso de opacidad */}
       <motion.div
-        className="absolute -top-40 -left-40 h-[28rem] w-[28rem] rounded-full bg-primario/35 blur-[140px]"
+        className="absolute -top-40 -left-40 h-112 w-md rounded-full bg-primario/35 blur-[140px]"
         animate={{ x: [0, 80, -30, 0], y: [0, 50, 100, 0], scale: [1, 1.18, 0.92, 1], opacity: [0.55, 0.85, 0.6, 0.55] }}
         transition={{ duration: 20, repeat: Infinity, ease: 'easeInOut' }}
       />
       <motion.div
-        className="absolute top-1/3 -right-40 h-[26rem] w-[26rem] rounded-full bg-secundario/35 blur-[140px]"
+        className="absolute top-1/3 -right-40 h-104 w-104 rounded-full bg-secundario/35 blur-[140px]"
         animate={{ x: [0, -60, 40, 0], y: [0, -50, -90, 0], scale: [1, 0.9, 1.22, 1], opacity: [0.5, 0.8, 0.55, 0.5] }}
         transition={{ duration: 24, repeat: Infinity, ease: 'easeInOut' }}
       />
@@ -159,7 +159,6 @@ export default function Register() {
   const [telefono, setTelefono] = useState('')
   const [rut, setRut] = useState('') // El estado del RUT (formateado: XX.XXX.XXX-X)
   const [rol, setRol] = useState<'cliente' | 'conductor'>('cliente')
-
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -469,6 +468,10 @@ export default function Register() {
             </Link>
           </p>
         </div>
+
+        <p className="text-center text-xs text-slate-600 mt-6">
+          2025 FlexVer — Todos los derechos reservados
+        </p>
       </motion.div>
     </div>
   )
