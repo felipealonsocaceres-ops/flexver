@@ -120,7 +120,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-slate-600 mt-6">
-          2025 FlexVer — Todos los derechos reservados
+          2026 FlexVer — Todos los derechos reservados
         </p>
       </motion.div>
     </div>
