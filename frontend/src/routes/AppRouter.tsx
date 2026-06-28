@@ -7,9 +7,13 @@ import Register from '../pages/Register';
 import PanelCliente from '../pages/PanelCliente';
 import PanelConductor from '../pages/PanelConductor';
 import Pago from '../pages/Pago'
+import PoliticaPrivacidad from '../pages/PoliticaPrivacidad';
 
-// Placeholder para las vistas que construiremos luego
-const PanelAdmin = () => <div>Panel de Administración (En construcción)</div>;
+// Panel de Administración (Centro de Comando)
+import AdminLayout from '../components/admin/AdminLayout';
+import DashboardBI from '../pages/admin/DashboardBI';
+import ValidacionKYC from '../pages/admin/ValidacionKYC';
+import GestionUsuarios from '../pages/admin/GestionUsuarios';
 
 const AppRouter = () => {
   return (
@@ -17,6 +21,8 @@ const AppRouter = () => {
       {/* Rutas Públicas */}
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      {/* Política de privacidad: siempre accesible (Ley 21.719) */}
+      <Route path="/politica-privacidad" element={<PoliticaPrivacidad />} />
 
       {/* Rutas Protegidas - Cliente */}
       <Route element={<RoleGuard allowedRoles={['cliente']} />}>
@@ -32,9 +38,13 @@ const AppRouter = () => {
         <Route path="/panel-conductor" element={<PanelConductor />} />
       </Route>
 
-      {/* Rutas Protegidas - Administrador */}
+      {/* Rutas Protegidas - Administrador (Centro de Comando) */}
       <Route element={<RoleGuard allowedRoles={['administrador']} />}>
-        <Route path="/admin" element={<PanelAdmin />} />
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<DashboardBI />} />
+          <Route path="kyc" element={<ValidacionKYC />} />
+          <Route path="usuarios" element={<GestionUsuarios />} />
+        </Route>
       </Route>
 
       {/* Redirección por defecto: Repartidor inteligente */}

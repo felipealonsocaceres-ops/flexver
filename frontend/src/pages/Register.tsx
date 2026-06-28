@@ -1,12 +1,23 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { User, Mail, Lock, Phone, AlertCircle, Truck, Store, UploadCloud, IdCard, ShieldCheck, Loader2 } from 'lucide-react'
+import { User, Mail, Lock, Phone, AlertCircle, Truck, Store, UploadCloud, IdCard, ShieldCheck, Loader2, ScanFace, FileText, Car, Lock as LockIcon } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { supabase } from '../lib/supabase'
+import { POLICY_VERSION } from '../lib/privacy'
 
 // Cero hardcodeo: la URL del backend vive en una variable de entorno.
 // El fallback a localhost es solo una comodidad para desarrollo local.
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+
+// Microcopy de minimización: por cada documento informamos finalidad y retención
+// de forma honesta. Los documentos viajan al backend, que los cifra en un bucket
+// PRIVADO bajo la carpeta del usuario (nunca públicos).
+type DocInfo = { finalidad: string; retencion: string }
+const DOC_INFO: Record<string, DocInfo> = {
+  carnet: { finalidad: 'Verificar tu identidad.', retencion: 'Cifrado en bucket privado mientras tu cuenta esté activa.' },
+  licencia: { finalidad: 'Confirmar que estás habilitado para conducir.', retencion: 'Cifrado en bucket privado mientras tu cuenta esté activa.' },
+  padron: { finalidad: 'Extraer solo patente, capacidad y vigencia.', retencion: 'No conservamos el documento como dato vivo, solo los campos extraídos.' },
+  selfie: { finalidad: 'Contrastarla manualmente con tu cédula.', retencion: 'Se destruye (o cifra AES-256) al aprobar tu cuenta; queda solo “identidad confirmada”.' },
+}
 
 // ── Utilidades de UX (formateo y validación visual) ──────────────────────────
 
@@ -151,6 +162,40 @@ function FloatingField({ id, label, icon: Icon, value, onChange, ...rest }: Floa
   )
 }
 
+// Campo de documento con microcopy de minimización honesto: finalidad + retención.
+// Definido a nivel de módulo para no remontarse en cada render.
+function DocUpload({
+  label,
+  info,
+  file,
+  onSelect,
+  icon: Icon,
+}: {
+  label: string
+  info: DocInfo
+  file: File | null
+  onSelect: (f: File | null) => void
+  icon: React.ComponentType<{ className?: string }>
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+      <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-slate-200">
+        <Icon className="h-4 w-4 text-secundario" /> {label}
+        {file && <ShieldCheck className="ml-auto h-3.5 w-3.5 text-emerald-400" />}
+      </div>
+      <p className="mb-0.5 text-[11px] text-slate-400"><span className="text-slate-500">Finalidad:</span> {info.finalidad}</p>
+      <p className="mb-2 text-[11px] text-slate-400"><span className="text-slate-500">Retención:</span> {info.retencion}</p>
+      <input
+        type="file"
+        accept="image/*"
+        onChange={(e) => onSelect(e.target.files?.[0] || null)}
+        required
+        className="w-full text-xs text-slate-400 file:mr-3 file:rounded-full file:border-0 file:bg-secundario/20 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-secundario hover:file:bg-secundario/30"
+      />
+    </div>
+  )
+}
+
 export default function Register() {
   const navigate = useNavigate()
   const [nombre, setNombre] = useState('')
@@ -158,104 +203,89 @@ export default function Register() {
   const [password, setPassword] = useState('')
   const [telefono, setTelefono] = useState('')
   const [rut, setRut] = useState('') // El estado del RUT (formateado: XX.XXX.XXX-X)
+  const [patente, setPatente] = useState('')
+  const [capacidad, setCapacidad] = useState('')
   const [rol, setRol] = useState<'cliente' | 'conductor'>('cliente')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Estados para los archivos del conductor
+  // Consentimiento: términos OBLIGATORIO (bloquea el botón) + marketing OPCIONAL
+  // apagado por defecto (nunca premarcado).
+  const [aceptaTerminos, setAceptaTerminos] = useState(false)
+  const [aceptaMarketing, setAceptaMarketing] = useState(false)
+
+  // Estados para los archivos del conductor (cédula, licencia, padrón, selfie).
   const [fileCarnetFrente, setFileCarnetFrente] = useState<File | null>(null)
   const [fileCarnetReverso, setFileCarnetReverso] = useState<File | null>(null)
   const [fileLicencia, setFileLicencia] = useState<File | null>(null)
+  const [filePadron, setFilePadron] = useState<File | null>(null)
+  const [fileSelfie, setFileSelfie] = useState<File | null>(null)
 
   const fuerza = evaluarPassword(password)
   const passwordDebil = password.length === 0 || fuerza.nivel === 'debil'
 
-  // Función auxiliar para subir a Supabase Storage
-  const subirArchivo = async (file: File, prefijo: string) => {
-    try {
-      console.log(`[1] Iniciando subida de: ${file.name}`)
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${prefijo}-${Date.now()}.${fileExt}`
-
-      console.log(`[2] Subiendo a Supabase como: ${fileName}`)
-      const { error } = await supabase.storage
-        .from('documentos')
-        .upload(fileName, file)
-
-      if (error) {
-        console.error("[X] Error interno de Supabase:", error)
-        throw new Error(`Error Supabase: ${error.message || 'Falló la subida'}`, { cause: error })
-      }
-
-      console.log(`[3] Archivo subido, obteniendo URL pública...`)
-      const { data: urlData } = supabase.storage.from('documentos').getPublicUrl(fileName)
-
-      console.log(`[4] URL obtenida exitosamente:`, urlData.publicUrl)
-      return urlData.publicUrl
-
-    } catch (e: unknown) {
-      console.error("[X] Excepción atrapada en subirArchivo:", e)
-      if (e instanceof Error) {
-        throw new Error(e.message, { cause: e })
-      }
-      throw new Error("Error inesperado al procesar el archivo", { cause: e })
-    }
-  }
-
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
+    // El consentimiento contractual es condición de registro.
+    if (!aceptaTerminos) {
+      setError('Debes aceptar los Términos y la Política de Privacidad para continuar.')
+      return
+    }
     setLoading(true)
 
-    // Timeout defensivo: si el backend no responde en 12s, abortamos la petición
-    // para no dejar la UI colgada en "Procesando...".
+    // Timeout defensivo: si el backend no responde en 20s, abortamos la petición.
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 12_000)
+    const timeoutId = setTimeout(() => controller.abort(), 20_000)
 
     try {
-      let urlFrente = "", urlReverso = "", urlLic = "";
+      let endpointUrl: string
+      let fetchInit: RequestInit
 
-      // Si es conductor, validamos y subimos los archivos primero
       if (rol === 'conductor') {
-        if (!fileCarnetFrente || !fileCarnetReverso || !fileLicencia) {
-          throw new Error("Debes adjuntar todos los documentos solicitados.")
+        if (!fileCarnetFrente || !fileCarnetReverso || !fileLicencia || !filePadron || !fileSelfie) {
+          throw new Error('Debes adjuntar todos los documentos solicitados, incluida la selfie.')
         }
-        urlFrente = await subirArchivo(fileCarnetFrente, 'carnet-frente')
-        urlReverso = await subirArchivo(fileCarnetReverso, 'carnet-reverso')
-        urlLic = await subirArchivo(fileLicencia, 'licencia')
+        // Multipart: los documentos los sube el BACKEND a un bucket privado bajo
+        // la carpeta del usuario. El cliente nunca los hace públicos.
+        const form = new FormData()
+        form.append('nombre_completo', nombre)
+        form.append('email', email)
+        form.append('password', password)
+        form.append('telefono', telefono)
+        form.append('rut', rut.replace(/\./g, ''))
+        if (patente) form.append('patente', patente.toUpperCase())
+        if (capacidad) form.append('capacidad_m3', capacidad)
+        form.append('acepta_terminos', String(aceptaTerminos))
+        form.append('acepta_marketing', String(aceptaMarketing))
+        form.append('carnet_frontal', fileCarnetFrente)
+        form.append('carnet_reverso', fileCarnetReverso)
+        form.append('licencia', fileLicencia)
+        form.append('padron', filePadron)
+        form.append('selfie', fileSelfie)
+        endpointUrl = `${API_URL}/api/v1/users/users/driver`
+        fetchInit = { method: 'POST', body: form, signal: controller.signal }
+      } else {
+        const payload = {
+          nombre_completo: nombre,
+          email,
+          password,
+          telefono,
+          rol,
+          acepta_terminos: aceptaTerminos,
+          acepta_marketing: aceptaMarketing,
+        }
+        endpointUrl = `${API_URL}/api/v1/users/users/client`
+        fetchInit = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        }
       }
 
-      const payload = {
-        nombre_completo: nombre,
-        email: email,
-        password: password,
-        telefono: telefono,
-        rol: rol,
-        ...(rol === 'conductor' && {
-          // Pydantic acepta el RUT con guion pero sin puntos (ej: 12345678-5).
-          // Limpiamos los puntos del valor formateado antes de enviarlo.
-          rut: rut.replace(/\./g, ''),
-          // Eliminamos estado_verificacion, disponible, latitud y longitud.
-          // El backend se encargará de gestionarlos de forma segura.
-          url_carnet_frontal: urlFrente,
-          url_carnet_reverso: urlReverso,
-          url_licencia: urlLic
-        })
-      }
-
-      const endpointUrl = rol === 'conductor'
-        ? `${API_URL}/api/v1/users/users/driver`
-        : `${API_URL}/api/v1/users/users/client`
-
-      const response = await fetch(endpointUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      })
+      const response = await fetch(endpointUrl, fetchInit)
 
       if (!response.ok) {
         const errorData = await response.json()
@@ -396,27 +426,65 @@ export default function Register() {
                   <FloatingField id="reg-rut" label="RUT (ej: 12.345.678-5)" icon={IdCard} type="text" value={rut} onChange={(e) => setRut(formatRUT(e.target.value))} required />
                 </div>
 
+                {/* Minimización del padrón: solo los campos necesarios. */}
+                <div className="grid grid-cols-2 gap-2">
+                  <FloatingField id="reg-patente" label="Patente" icon={Car} type="text" value={patente} onChange={(e) => setPatente(e.target.value.toUpperCase())} />
+                  <FloatingField id="reg-capacidad" label="Capacidad (m³)" icon={FileText} type="number" value={capacidad} onChange={(e) => setCapacidad(e.target.value)} />
+                </div>
+
                 <h3 className="text-sm font-semibold text-secundario flex items-center gap-2">
                   <UploadCloud className="h-4 w-4" /> Documentos requeridos
                 </h3>
 
-                <div className="text-xs text-slate-400 flex flex-col gap-1">
-                  <label>Carnet Frontal</label>
-                  <input type="file" accept="image/*" onChange={(e) => setFileCarnetFrente(e.target.files?.[0] || null)} required className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-secundario/20 file:text-secundario hover:file:bg-secundario/30" />
+                {/* Garantía visual de cifrado/privacidad del almacenamiento. */}
+                <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-300">
+                  <LockIcon className="h-3.5 w-3.5 shrink-0" /> Tus documentos se cifran y guardan en un bucket privado. Nadie más que tú y el equipo de validación puede verlos.
                 </div>
 
-                <div className="text-xs text-slate-400 flex flex-col gap-1">
-                  <label>Carnet Reverso</label>
-                  <input type="file" accept="image/*" onChange={(e) => setFileCarnetReverso(e.target.files?.[0] || null)} required className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-secundario/20 file:text-secundario hover:file:bg-secundario/30" />
-                </div>
-
-                <div className="text-xs text-slate-400 flex flex-col gap-1">
-                  <label>Licencia de Conducir</label>
-                  <input type="file" accept="image/*" onChange={(e) => setFileLicencia(e.target.files?.[0] || null)} required className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-secundario/20 file:text-secundario hover:file:bg-secundario/30" />
-                </div>
+                <DocUpload label="Cédula — Frontal" info={DOC_INFO.carnet} file={fileCarnetFrente} onSelect={setFileCarnetFrente} icon={IdCard} />
+                <DocUpload label="Cédula — Reverso" info={DOC_INFO.carnet} file={fileCarnetReverso} onSelect={setFileCarnetReverso} icon={IdCard} />
+                <DocUpload label="Licencia de Conducir" info={DOC_INFO.licencia} file={fileLicencia} onSelect={setFileLicencia} icon={FileText} />
+                <DocUpload label="Padrón del Vehículo" info={DOC_INFO.padron} file={filePadron} onSelect={setFilePadron} icon={Car} />
+                <DocUpload label="Selfie de validación" info={DOC_INFO.selfie} file={fileSelfie} onSelect={setFileSelfie} icon={ScanFace} />
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* ── Consentimiento granular (Ley 21.719) ─────────────────────── */}
+          <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-slate-900/40 p-4">
+            {/* Términos: OBLIGATORIO. Bloquea el botón si no está marcado. */}
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={aceptaTerminos}
+                onChange={(e) => setAceptaTerminos(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-primario"
+              />
+              <span className="text-xs text-slate-300">
+                Acepto los{' '}
+                <Link to="/politica-privacidad" target="_blank" className="text-primario hover:underline">
+                  Términos y la Política de Privacidad
+                </Link>{' '}
+                <span className="text-slate-500">(v{POLICY_VERSION})</span>. Obligatorio para crear la cuenta.
+              </span>
+            </label>
+
+            {/* Marketing: OPCIONAL, apagado por defecto (nunca premarcado). */}
+            <label className="flex cursor-pointer items-center justify-between gap-3">
+              <span className="text-xs text-slate-400">
+                Quiero recibir novedades y promociones por correo <span className="text-slate-600">(opcional)</span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={aceptaMarketing}
+                onClick={() => setAceptaMarketing((v) => !v)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${aceptaMarketing ? 'bg-primario' : 'bg-slate-600'}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${aceptaMarketing ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </label>
+          </div>
 
           <AnimatePresence>
             {error && (
@@ -434,9 +502,9 @@ export default function Register() {
 
           <motion.button
             type="submit"
-            disabled={loading || passwordDebil}
-            whileHover={{ scale: loading || passwordDebil ? 1 : 1.02 }}
-            whileTap={{ scale: loading || passwordDebil ? 1 : 0.98 }}
+            disabled={loading || passwordDebil || !aceptaTerminos}
+            whileHover={{ scale: loading || passwordDebil || !aceptaTerminos ? 1 : 1.02 }}
+            whileTap={{ scale: loading || passwordDebil || !aceptaTerminos ? 1 : 0.98 }}
             className="group relative w-full flex items-center justify-center gap-2 overflow-hidden rounded-xl py-3 font-bold text-white mt-2 bg-linear-to-r from-primario to-secundario shadow-lg shadow-primario/25 transition-all hover:shadow-primario/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primario/60 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
           >
             <span className="pointer-events-none absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />

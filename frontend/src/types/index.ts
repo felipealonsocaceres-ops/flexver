@@ -33,12 +33,23 @@ export interface Tarifa {
   vigente: boolean
 }
 
+// Semáforo de Onboarding (Ley 21.719 / verificación manual de 7 días).
+export type EstadoVerificacion =
+  | 'faltan_documentos'
+  | 'en_revision'
+  | 'aprobado'
+  | 'rechazado'
+
 export interface Conductor {
   id_conductor: string
   id_usuario: string
   rut: string
-  estado_verificacion: 'pendiente' | 'aprobado' | 'rechazado'
+  estado_verificacion: EstadoVerificacion
   disponible: boolean
   latitud_actual?: number
   longitud_actual?: number
+  verificado_el?: string | null
+  identidad_confirmada?: boolean
+  patente?: string | null
+  capacidad_m3?: number | null
 }

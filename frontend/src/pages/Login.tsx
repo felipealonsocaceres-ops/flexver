@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Mail, Lock, AlertCircle, LogIn, Loader2 } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { Mail, Lock, AlertCircle, LogIn, Loader2, ShieldAlert } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
+import { POLICY_VERSION, getMisConsentimientos, registrarConsentimiento } from '../lib/privacy'
 
 // ── Sistema de diseño compartido (Deep Dark Tech Premium) ────────────────────
 // Mantiene consistencia visual exacta con la pantalla de Registro.
@@ -102,6 +103,9 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Re-consentimiento: si la política avanzó respecto de la versión aceptada.
+  const [reconsent, setReconsent] = useState(false)
+  const [reconsentLoading, setReconsentLoading] = useState(false)
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -115,6 +119,19 @@ export default function Login() {
       })
       if (authError) throw authError
 
+      // ¿La política se actualizó desde la última vez? Si es así, pedimos
+      // re-consentimiento antes de dejar entrar.
+      try {
+        const estado = await getMisConsentimientos()
+        if (estado.requiere_reconsentimiento) {
+          setReconsent(true)
+          setLoading(false)
+          return
+        }
+      } catch {
+        // Si la verificación falla, no bloqueamos el login (degradación suave).
+      }
+
       // No redirigimos a mano por rol: vamos a /home y el RoleGuard
       // reenvía automáticamente al conductor a /panel-conductor.
       navigate('/home')
@@ -123,6 +140,19 @@ export default function Login() {
     } finally {
       // Pase lo que pase (éxito o error) el spinner se apaga.
       setLoading(false)
+    }
+  }
+
+  const aceptarNuevaPolitica = async () => {
+    setReconsentLoading(true)
+    try {
+      await registrarConsentimiento('terminos_y_politica', true)
+      navigate('/home')
+    } catch {
+      setError('No se pudo registrar tu aceptación. Inténtalo nuevamente.')
+      setReconsent(false)
+    } finally {
+      setReconsentLoading(false)
     }
   }
 
@@ -167,6 +197,41 @@ export default function Login() {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
+
+          {/* Aviso de política actualizada: re-consentimiento requerido */}
+          <AnimatePresence>
+            {reconsent && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
+              >
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
+                  <div className="text-sm text-amber-100">
+                    <p className="font-semibold">Actualizamos nuestra Política de Privacidad</p>
+                    <p className="mt-1 text-xs text-amber-200/80">
+                      Publicamos la versión <span className="font-mono">{POLICY_VERSION}</span>. Para continuar,
+                      revisa y acepta los nuevos términos.
+                    </p>
+                    <Link to="/politica-privacidad" target="_blank" className="mt-1 inline-block text-xs text-amber-300 underline">
+                      Ver la política
+                    </Link>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={aceptarNuevaPolitica}
+                  disabled={reconsentLoading}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-amber-400 py-2.5 text-sm font-bold text-slate-900 transition-opacity hover:opacity-90 disabled:opacity-60"
+                >
+                  {reconsentLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
+                  Acepto la versión {POLICY_VERSION} y continúo
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {error && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-2 text-terciario text-sm bg-red-950/30 p-3 rounded-lg border border-red-900">

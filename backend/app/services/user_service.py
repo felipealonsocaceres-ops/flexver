@@ -1,12 +1,16 @@
 """Servicio del dominio de Usuarios.
 
-Orquesta los casos de uso de identidad (registro y consulta) coordinando la
-creación de la identidad en Supabase Auth y la persistencia del perfil a través
-del repositorio. La capa de API no contiene esta lógica; solo invoca al servicio.
+Orquesta los casos de uso de identidad (registro, verificación y consulta)
+coordinando la creación de la identidad en Supabase Auth, la persistencia del
+perfil, el almacenamiento PRIVADO de documentos y la evidencia de
+consentimiento. La capa de API no contiene esta lógica; solo invoca al servicio.
 """
+
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 
+from app.core.consent import POLICY_VERSION, ConsentType
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import ClientProfileCreate, DriverProfileCreate, Rol, UserResponse
 
@@ -25,6 +29,15 @@ class UserService:
     def __init__(self, repository: UserRepository) -> None:
         """Recibe el repositorio inyectado (inversión de dependencias)."""
         self._repository = repository
+
+    # --- Helpers --------------------------------------------------------------
+    def _require_terms(self, acepta_terminos: bool) -> None:
+        """Bloquea el registro si no se aceptan los términos (contractual)."""
+        if not acepta_terminos:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Debes aceptar los Términos y la Política de Privacidad para registrarte.",
+            )
 
     def _create_identity(self, email: str, password: str) -> str:
         """Crea la identidad en Supabase Auth.
@@ -47,55 +60,113 @@ class UserService:
                 detail="No se pudo crear la cuenta. Inténtalo nuevamente más tarde.",
             ) from exc
 
-    def register_driver(self, data: DriverProfileCreate) -> UserResponse:
-        """Registra un conductor: identidad, perfil de usuario y perfil de conductor.
+    def _record_registration_consents(
+        self,
+        *,
+        user_id: str,
+        acepta_marketing: bool,
+        ip: str | None,
+        user_agent: str | None,
+    ) -> None:
+        """Deja evidencia inmutable de los consentimientos dados al registrarse.
 
-        Aplica un patrón de transacción de compensación (Rollback) si el flujo falla
-        para evitar dejar registros huérfanos en Supabase Auth.
+        Términos siempre va otorgado (ya se validó). Marketing refleja el toggle
+        opcional (true u false). El servidor estampa versión, IP y User-Agent.
+        """
+        base = {
+            "id_usuario": user_id,
+            "version_politica": POLICY_VERSION,
+            "ip_origen": ip,
+            "user_agent": user_agent,
+        }
+        self._repository.insert_consent(
+            {**base, "tipo": ConsentType.TERMINOS_Y_POLITICA.value, "otorgado": True}
+        )
+        self._repository.insert_consent(
+            {**base, "tipo": ConsentType.MARKETING.value, "otorgado": bool(acepta_marketing)}
+        )
+
+    # --- Registro -------------------------------------------------------------
+    def register_driver(
+        self,
+        data: DriverProfileCreate,
+        archivos: dict[str, dict],
+        meta: dict[str, str | None] | None = None,
+    ) -> UserResponse:
+        """Registra un conductor: identidad, perfil, documentos KYC y evidencia.
+
+        Los documentos se suben a un bucket PRIVADO bajo la carpeta del usuario.
+        El estado inicial es 'en_revision' (ya entregó la documentación) para que
+        el Guardián de Onboarding bloquee el panel hasta la aprobación manual.
+        Aplica rollback compensatorio (Auth + Storage) si algo falla.
         """
         if data.rol is not Rol.CONDUCTOR:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Este endpoint es exclusivo para el registro de conductores.",
             )
+        self._require_terms(data.acepta_terminos)
 
+        meta = meta or {}
         # 1. Crear la identidad en Supabase Auth (mapea correo duplicado a 409)
         user_id = self._create_identity(data.email, data.password)
 
         try:
-            # 2. Intentar crear el perfil general del usuario
-            profile = {
-                "id_usuario": user_id,
-                "nombre_completo": data.nombre_completo,
-                "email": data.email,
-                "telefono": data.telefono,
-                "rol": data.rol.value,
-            }
-            created = self._repository.create_user_profile(profile)
+            # 2. Subir documentos al bucket privado: {user_id}/<doc>.<ext>
+            rutas: dict[str, str] = {}
+            for clave, archivo in archivos.items():
+                rutas[clave] = self._repository.upload_kyc_file(
+                    user_id,
+                    archivo["filename"],
+                    archivo["data"],
+                    archivo["content_type"],
+                )
 
-            # 3. Intentar crear el perfil específico de conductor (Forzando lógica interna)
+            # 3. Perfil general del usuario (deja constancia de la versión aceptada)
+            created = self._repository.create_user_profile(
+                {
+                    "id_usuario": user_id,
+                    "nombre_completo": data.nombre_completo,
+                    "email": data.email,
+                    "telefono": data.telefono,
+                    "rol": data.rol.value,
+                    "version_politica_aceptada": POLICY_VERSION,
+                }
+            )
+
+            # 4. Perfil de conductor: SEMÁFORO en 'en_revision', no disponible.
+            #    Minimización: solo patente/capacidad extraídas del padrón.
             self._repository.create_driver_profile(
                 {
                     "id_usuario": user_id,
                     "rut": data.rut,
-                    "estado_verificacion": "pendiente",  # Forzado internamente por seguridad
-                    "disponible": False,                  # No disponible hasta ser verificado
-                    "latitud_actual": None,               # Evitamos ubicarlo en el océano (0.0)
+                    "estado_verificacion": "en_revision",
+                    "disponible": False,
+                    "latitud_actual": None,
                     "longitud_actual": None,
-                    "url_carnet_frontal": data.url_carnet_frontal,
-                    "url_carnet_reverso": data.url_carnet_reverso,
-                    "url_licencia": data.url_licencia,
+                    "patente": data.patente,
+                    "capacidad_m3": data.capacidad_m3,
+                    "url_carnet_frontal": rutas.get("carnet_frontal"),
+                    "url_carnet_reverso": rutas.get("carnet_reverso"),
+                    "url_licencia": rutas.get("licencia"),
+                    "url_padron": rutas.get("padron"),
+                    "url_selfie": rutas.get("selfie"),
+                    "identidad_confirmada": False,
                 }
             )
-        except Exception as exc:
-            # Transacción de compensación: Si el perfil falló, eliminamos el usuario de Auth
-            print(f"[Rollback] Falló la creación del perfil. Eliminando auth user: {user_id}")
-            try:
-                self._repository.delete_auth_user(user_id)
-            except Exception as rollback_err:
-                # Loggear el fallo del rollback pero propagar el error original
-                print(f"[Crítico] No se pudo ejecutar el rollback de Auth: {rollback_err}")
 
+            # 5. Evidencia de consentimiento (términos + marketing opcional)
+            self._record_registration_consents(
+                user_id=user_id,
+                acepta_marketing=data.acepta_marketing,
+                ip=meta.get("ip"),
+                user_agent=meta.get("user_agent"),
+            )
+        except HTTPException:
+            self._rollback(user_id)
+            raise
+        except Exception as exc:  # noqa: BLE001 - frontera con Supabase
+            self._rollback(user_id)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="No se pudo completar el registro debido a un error interno del servidor.",
@@ -103,36 +174,44 @@ class UserService:
 
         return UserResponse.model_validate(created)
 
-    def register_client(self, data: ClientProfileCreate) -> UserResponse:
-        """Registra un cliente: identidad y perfil de usuario."""
+    def register_client(
+        self,
+        data: ClientProfileCreate,
+        meta: dict[str, str | None] | None = None,
+    ) -> UserResponse:
+        """Registra un cliente: identidad, perfil y evidencia de consentimiento."""
         if data.rol is not Rol.CLIENTE:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Este endpoint es exclusivo para el registro de clientes.",
             )
+        self._require_terms(data.acepta_terminos)
 
-        # 1. Crear la identidad en Supabase Auth (mapea correo duplicado a 409)
+        meta = meta or {}
         user_id = self._create_identity(data.email, data.password)
 
         try:
-            # 2. Crear en tabla usuarios (NO toca la tabla conductores)
-            profile = {
-                "id_usuario": user_id,
-                "nombre_completo": data.nombre_completo,
-                "email": data.email,
-                "telefono": data.telefono,
-                "rol": data.rol.value,
-            }
-            created = self._repository.create_user_profile(profile)
-
-        except Exception as exc:
-            # Transacción de compensación: si el perfil falló, eliminamos el usuario de Auth
-            print(f"[Rollback] Falló la creación del perfil. Eliminando auth user: {user_id}")
-            try:
-                self._repository.delete_auth_user(user_id)
-            except Exception as rollback_err:
-                print(f"[Crítico] No se pudo ejecutar el rollback de Auth: {rollback_err}")
-
+            created = self._repository.create_user_profile(
+                {
+                    "id_usuario": user_id,
+                    "nombre_completo": data.nombre_completo,
+                    "email": data.email,
+                    "telefono": data.telefono,
+                    "rol": data.rol.value,
+                    "version_politica_aceptada": POLICY_VERSION,
+                }
+            )
+            self._record_registration_consents(
+                user_id=user_id,
+                acepta_marketing=data.acepta_marketing,
+                ip=meta.get("ip"),
+                user_agent=meta.get("user_agent"),
+            )
+        except HTTPException:
+            self._rollback(user_id)
+            raise
+        except Exception as exc:  # noqa: BLE001 - frontera con Supabase
+            self._rollback(user_id)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="No se pudo completar el registro debido a un error interno del servidor.",
@@ -140,6 +219,105 @@ class UserService:
 
         return UserResponse.model_validate(created)
 
+    def _rollback(self, user_id: str) -> None:
+        """Transacción de compensación: borra documentos y la identidad de Auth."""
+        print(f"[Rollback] Falló el registro. Limpiando storage y auth user: {user_id}")
+        try:
+            self._repository.delete_kyc_folder(user_id)
+        except Exception as err:  # noqa: BLE001 - best-effort
+            print(f"[Rollback] No se pudo limpiar storage: {err}")
+        try:
+            self._repository.delete_auth_user(user_id)
+        except Exception as err:  # noqa: BLE001 - best-effort
+            print(f"[Crítico] No se pudo ejecutar el rollback de Auth: {err}")
+
+    # --- Verificación manual (Onboarding) ------------------------------------
+    def aprobar_conductor(self, user_id: str) -> dict:
+        """Aprueba al conductor y DESTRUYE la selfie cruda (minimización).
+
+        Tras el contraste manual selfie↔cédula, la imagen biométrica deja de ser
+        necesaria: se elimina del bucket y solo queda el registro lógico
+        `identidad_confirmada = true`. Es el principio de minimización aplicado.
+        """
+        driver = self._repository.get_driver_by_user(user_id)
+        if driver is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conductor no encontrado.",
+            )
+
+        # Destruir la selfie cruda (si existe). Best-effort: si falla la borrada
+        # no abortamos la aprobación, pero lo dejamos registrado.
+        url_selfie = driver.get("url_selfie")
+        selfie_destruida = False
+        if url_selfie:
+            try:
+                self._repository.delete_kyc_path(url_selfie)
+                selfie_destruida = True
+            except Exception as err:  # noqa: BLE001 - best-effort
+                print(f"[Aprobación] No se pudo destruir la selfie: {err}")
+
+        cambios = {
+            "estado_verificacion": "aprobado",
+            "verificado_el": datetime.now(timezone.utc).isoformat(),
+            "identidad_confirmada": True,
+        }
+        if selfie_destruida:
+            cambios["url_selfie"] = None
+            cambios["selfie_destruida_el"] = datetime.now(timezone.utc).isoformat()
+
+        actualizado = self._repository.update_driver_verification(user_id, cambios)
+        if actualizado is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="No se pudo actualizar el estado del conductor.",
+            )
+        return {"estado_verificacion": "aprobado", "identidad_confirmada": True}
+
+    def obtener_documentos_kyc(self, user_id: str) -> dict:
+        """Genera Signed URLs temporales de los documentos KYC para un admin.
+
+        El bucket es PRIVADO y su RLS solo deja leer al dueño de la carpeta, por
+        lo que el frontend de administración NO puede firmar estas URLs: debe
+        pasar por aquí (service_role). Solo se firman los documentos presentes;
+        si la selfie ya fue destruida tras la aprobación, simplemente no aparece.
+        """
+        driver = self._repository.get_driver_by_user(user_id)
+        if driver is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conductor no encontrado.",
+            )
+
+        # Mapa documento lógico -> columna con su path dentro del bucket privado.
+        paths = {
+            "carnet_frontal": driver.get("url_carnet_frontal"),
+            "carnet_reverso": driver.get("url_carnet_reverso"),
+            "licencia": driver.get("url_licencia"),
+            "padron": driver.get("url_padron"),
+            "selfie": driver.get("url_selfie"),
+        }
+        # URLs de vida corta (15 min): suficiente para la revisión manual.
+        documentos = {
+            clave: self._repository.signed_url(path, expires_in=900)
+            for clave, path in paths.items()
+            if path
+        }
+        return {"documentos": documentos}
+
+    def rechazar_conductor(self, user_id: str, motivo: str | None = None) -> dict:
+        """Rechaza al conductor (queda fuera del semáforo de aprobación)."""
+        actualizado = self._repository.update_driver_verification(
+            user_id, {"estado_verificacion": "rechazado"}
+        )
+        if actualizado is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conductor no encontrado.",
+            )
+        return {"estado_verificacion": "rechazado", "motivo": motivo}
+
+    # --- Consulta -------------------------------------------------------------
     def get_user(self, user_id: str) -> UserResponse:
         """Recupera un usuario por id o lanza 404 si no existe."""
         try:

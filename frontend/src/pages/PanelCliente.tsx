@@ -23,8 +23,10 @@ import {
   LogOut,
   AlertCircle,
   GripHorizontal,
+  ShieldCheck,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import CentroPrivacidad from '../components/privacy/CentroPrivacidad'
 import { useAuth } from '../context/AuthContext'
 import {
   RM_CENTER,
@@ -158,6 +160,7 @@ export default function PanelCliente() {
   const mapRef = useRef<MapRef | null>(null)
 
   const [activeNav, setActiveNav] = useState<NavId>('mapa')
+  const [privacidadOpen, setPrivacidadOpen] = useState(false)
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [sheetOpen, setSheetOpen] = useState(true)
   const [nombre, setNombre] = useState('Usuario')
@@ -546,10 +549,25 @@ export default function PanelCliente() {
       )}
       {activeNav === 'ajustes' && (
         <div className="absolute inset-0 z-10 flex items-center justify-center px-4 md:pl-80">
-          <div className="rounded-3xl border border-white/15 bg-gray-900/80 p-8 text-center text-slate-300 backdrop-blur-md">
-            <Settings className="mx-auto mb-3 h-8 w-8 text-slate-400" />
-            <p className="font-medium text-white">Ajustes</p>
-            <p className="mt-1 text-sm text-slate-400">Próximamente.</p>
+          <div className="w-full max-w-md rounded-3xl border border-white/15 bg-gray-900/80 p-6 text-slate-300 backdrop-blur-md">
+            <div className="mb-5 flex items-center gap-3">
+              <Settings className="h-6 w-6 text-slate-400" />
+              <p className="text-lg font-semibold text-white">Ajustes</p>
+            </div>
+
+            {/* Privacidad: gestión de consentimientos (Ley 21.719) */}
+            <button
+              onClick={() => setPrivacidadOpen(true)}
+              className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:bg-white/10"
+            >
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-primario to-secundario">
+                <ShieldCheck className="h-5 w-5 text-white" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-white">Centro de Privacidad</span>
+                <span className="block text-xs text-slate-400">Gestiona tus consentimientos y revisa la política.</span>
+              </span>
+            </button>
           </div>
         </div>
       )}
@@ -698,6 +716,9 @@ export default function PanelCliente() {
           </motion.div>
         )}
       </div>
+
+      {/* Centro de Privacidad: gestión de consentimientos del cliente. */}
+      <CentroPrivacidad open={privacidadOpen} onClose={() => setPrivacidadOpen(false)} />
     </div>
   )
 }

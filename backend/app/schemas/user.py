@@ -49,9 +49,22 @@ class UserCreate(UserBase):
 
     Incluye la contraseña, que se usa únicamente para crear la identidad en
     Supabase Auth y nunca se persiste en la tabla `usuarios` ni se devuelve.
+
+    El consentimiento se separa por capas:
+      - `acepta_terminos` es CONTRACTUAL y obligatorio: sin él no hay cuenta.
+      - `acepta_marketing` es OPCIONAL y nace apagado (nunca premarcado).
+    Ambos quedan como evidencia inmutable en la tabla `consentimientos`.
     """
 
     password: str = Field(..., min_length=6, max_length=72)
+    acepta_terminos: bool = Field(
+        default=False,
+        description="Aceptación contractual de Términos + Política (obligatorio).",
+    )
+    acepta_marketing: bool = Field(
+        default=False,
+        description="Consentimiento OPCIONAL de marketing (apagado por defecto).",
+    )
 
 
 class ClientProfileCreate(UserCreate):
@@ -71,9 +84,13 @@ class DriverProfileCreate(UserCreate):
 
     rol: Rol = Field(default=Rol.CONDUCTOR, frozen=True)
     rut: str = Field(..., min_length=8, max_length=12)
-    url_carnet_frontal: str | None = Field(default=None)
-    url_carnet_reverso: str | None = Field(default=None)
-    url_licencia: str | None = Field(default=None)
+    # Minimización del padrón: el conductor declara solo los campos necesarios.
+    # La imagen del padrón se usa para verificarlos, no se persiste como dato vivo.
+    patente: str | None = Field(default=None, max_length=10)
+    capacidad_m3: float | None = Field(default=None, ge=0, le=200)
+    # Los documentos (cédula, licencia, padrón, selfie) llegan como archivos
+    # multipart y el servidor los sube a un bucket PRIVADO bajo la carpeta del
+    # usuario. Por eso aquí ya no viajan URLs desde el cliente.
 
     @field_validator('rut')
     @classmethod

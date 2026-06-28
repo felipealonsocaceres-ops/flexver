@@ -34,6 +34,9 @@ import { toast } from 'sonner'
 import { obtenerRutaGeoJSON, calcularDistanciaKm, type RutaFeature } from '../lib/geo'
 import { codigoDeFlete } from '../lib/codigoEntrega'
 import { celebrar } from '../lib/celebrar'
+import OnboardingGuard from '../components/privacy/OnboardingGuard'
+import CentroPrivacidad from '../components/privacy/CentroPrivacidad'
+import type { EstadoVerificacion } from '../types'
 
 /* -------------------------------------------------------------------------- */
 /*  Tipos                                                                       */
@@ -448,6 +451,31 @@ export default function PanelConductor() {
   const { user } = useAuth()
   const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN
 
+  // ---------------------------------------------------------------------------
+  // Guardián de Onboarding: hasta que el conductor esté 'aprobado', NO montamos
+  // el mapa de fletes ni la telemetría. Resolvemos su estado antes de todo.
+  // ---------------------------------------------------------------------------
+  const [estadoVerificacion, setEstadoVerificacion] = useState<EstadoVerificacion | null>(null)
+  const [verificando, setVerificando] = useState(true)
+
+  useEffect(() => {
+    let cancelado = false
+    const cargarEstado = async () => {
+      if (!user) return
+      const { data } = await supabase
+        .from('conductores')
+        .select('estado_verificacion')
+        .eq('id_usuario', user.id)
+        .single()
+      if (!cancelado) {
+        setEstadoVerificacion((data?.estado_verificacion as EstadoVerificacion) ?? 'faltan_documentos')
+        setVerificando(false)
+      }
+    }
+    cargarEstado()
+    return () => { cancelado = true }
+  }, [user])
+
   const [isOnline, setIsOnline] = useState(false)
   const [activeNav, setActiveNav] = useState('mapa')
   const [nuevoFlete, setNuevoFlete] = useState<FleteSolicitud | null>(null)
@@ -605,6 +633,23 @@ export default function PanelConductor() {
     setCodigoError('')
     celebrar()
     toast.success('¡Viaje finalizado! 🎉', { description: 'El cobro se procesará al cliente.' })
+  }
+
+  // 🔒 GUARDIÁN DE ONBOARDING — bloqueo total hasta la aprobación.
+  // Mientras resolvemos el estado, mostramos un loader (no filtramos el mapa).
+  if (verificando) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#0a0e1a] text-slate-300">
+        <span className="flex items-center gap-2 text-sm">
+          <span className="h-2 w-2 animate-ping rounded-full bg-primario" /> Verificando tu estado de cuenta…
+        </span>
+      </div>
+    )
+  }
+  // Cualquier estado distinto de 'aprobado' bloquea el mapa de fletes y la
+  // telemetría: el componente del mapa ni siquiera se monta.
+  if (estadoVerificacion && estadoVerificacion !== 'aprobado') {
+    return <OnboardingGuard estado={estadoVerificacion} />
   }
 
   if (!mapboxToken) {
@@ -833,6 +878,9 @@ export default function PanelConductor() {
           />
         </motion.div>
       </div>
+
+      {/* Centro de Privacidad: se abre desde el item "Ajustes" del menú. */}
+      <CentroPrivacidad open={activeNav === 'ajustes'} onClose={() => setActiveNav('mapa')} />
     </div>
   )
 }
