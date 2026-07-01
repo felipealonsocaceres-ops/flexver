@@ -17,11 +17,15 @@ app = FastAPI(
     description="Backend logístico FlexVer: usuarios, tarifas dinámicas y telemetría GPS.",
 )
 
-# --- CORS abierto para desarrollo local (restringir en producción) ---
+# --- CORS para desarrollo y producción ---
 app.add_middleware(
     CORSMiddleware,
-    # Permite orígenes específicos (el puerto de Vite)
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://flexver-app.web.app",
+        settings.FRONTEND_URL,
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
