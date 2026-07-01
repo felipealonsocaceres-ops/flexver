@@ -1,9 +1,17 @@
 import { useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { MapPin, Flag, Package, X } from 'lucide-react'
+import { MapPin, Flag, Package, X, Radar, Loader2, CreditCard, Wallet, Clock, ArrowLeft } from 'lucide-react'
+import { toast } from 'sonner'
 import { formatearPrecio } from '../../lib/calcularTarifa'
-import { buscarDirecciones, type SugerenciaDireccion } from '../../lib/geo'
+import {
+  buscarDirecciones,
+  reverseGeocode,
+  obtenerUbicacionActual,
+  type SugerenciaDireccion,
+} from '../../lib/geo'
 import type { DesgloseTarifa } from '../../lib/api'
+import type { MetodoPago } from '../../lib/deuda'
+import SugerenciaTarifa from '../premium/SugerenciaTarifa'
 
 /* -------------------------------------------------------------------------- */
 /*  Buscador de direcciones con autocompletado (limitado a la RM vía lib/geo). */
@@ -20,6 +28,7 @@ function BuscadorDireccion({
   const [query, setQuery] = useState(valorInicial)
   const [sugerencias, setSugerencias] = useState<SugerenciaDireccion[]>([])
   const [seleccionado, setSeleccionado] = useState(Boolean(valorInicial))
+  const [ubicando, setUbicando] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -39,6 +48,25 @@ function BuscadorDireccion({
     onSeleccionar(sug.place_name, sug.center[0], sug.center[1])
   }
 
+  // GPS del dispositivo + reverse geocoding: rellena el input con la dirección real.
+  const handleUsarMiUbicacion = async () => {
+    setUbicando(true)
+    try {
+      const { lng, lat } = await obtenerUbicacionActual()
+      const dir = await reverseGeocode(lng, lat)
+      const texto = dir ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+      setQuery(texto)
+      setSeleccionado(true)
+      setSugerencias([])
+      onSeleccionar(texto, lng, lat)
+      toast.success('Ubicación detectada 📍')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo obtener tu ubicación.')
+    } finally {
+      setUbicando(false)
+    }
+  }
+
   return (
     <div className="relative">
       <input
@@ -46,10 +74,20 @@ function BuscadorDireccion({
         placeholder={placeholder}
         value={query}
         onChange={handleChange}
-        className={`w-full rounded-xl border bg-white/5 px-4 py-3 text-sm text-white placeholder-slate-400 backdrop-blur-sm transition-colors focus:outline-none focus:ring-2 focus:ring-primario ${
+        className={`w-full rounded-xl border bg-white/5 py-3 pl-4 pr-12 text-sm text-white placeholder-slate-400 backdrop-blur-sm transition-colors focus:outline-none focus:ring-2 focus:ring-primario ${
           seleccionado ? 'border-emerald-400/60' : 'border-white/15'
         }`}
       />
+      {/* Botón "Usar mi ubicación actual" (radar): GPS + reverse geocoding. */}
+      <button
+        type="button"
+        onClick={handleUsarMiUbicacion}
+        disabled={ubicando}
+        title="Usar mi ubicación actual"
+        className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg border border-white/15 bg-white/5 text-primario transition-colors hover:bg-primario/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {ubicando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}
+      </button>
       {sugerencias.length > 0 && (
         <div className="absolute inset-x-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-white/15 bg-slate-900/95 shadow-2xl shadow-black/50 backdrop-blur-xl">
           {sugerencias.map((sug, i) => (
@@ -117,6 +155,8 @@ export interface WizardProps {
   setDescripcion: (v: string) => void
   volumen: number
   setVolumen: (v: number) => void
+  metodoPago: MetodoPago
+  setMetodoPago: (m: MetodoPago) => void
   distancia: number
   cotizando: boolean
   desglose: DesgloseTarifa | null
@@ -136,6 +176,7 @@ export default function WizardSolicitud(props: WizardProps) {
     destinoDir, destinoSel,
     descripcion, setDescripcion,
     volumen, setVolumen,
+    metodoPago, setMetodoPago,
     distancia, cotizando, desglose, tarifaTotal, error, loading,
     onSeleccionarOrigen, onSeleccionarDestino, onConfirmar, onCerrar,
   } = props
@@ -156,7 +197,8 @@ export default function WizardSolicitud(props: WizardProps) {
         </div>
         <button
           onClick={onCerrar}
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 bg-white/5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+          title="Cancelar y cerrar"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 bg-white/5 text-slate-300 transition-colors hover:border-red-400/40 hover:bg-red-500/15 hover:text-red-300"
         >
           <X className="h-4 w-4" />
         </button>
@@ -219,9 +261,10 @@ export default function WizardSolicitud(props: WizardProps) {
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setPaso(1)}
-                className="rounded-xl border border-white/15 bg-white/5 py-3 font-medium text-slate-300 transition-colors hover:text-white"
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-white/5 py-3 font-medium text-slate-300 transition-colors hover:text-white"
               >
-                Volver
+                <ArrowLeft className="h-4 w-4" />
+                Atrás
               </button>
               <button
                 onClick={() => setPaso(3)}
@@ -287,6 +330,44 @@ export default function WizardSolicitud(props: WizardProps) {
               </div>
             )}
 
+            {/* Sugerencia de Tarifa Dinámica (IA de mercado) — aparece tras la cotización. */}
+            {!cotizando && tarifaTotal !== null && <SugerenciaTarifa monto={2500} />}
+
+            {/* Método de pago — "Contra Entrega"/"Pagar Después" generan deuda al entregar. */}
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-slate-300">Método de pago</label>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { id: 'online', label: 'Pago Online', icon: CreditCard },
+                  { id: 'contra_entrega', label: 'Contra Entrega', icon: Wallet },
+                  { id: 'pagar_despues', label: 'Pagar Después', icon: Clock },
+                ] as const).map(({ id, label, icon: Icon }) => {
+                  const activo = metodoPago === id
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setMetodoPago(id)}
+                      className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-[11px] font-semibold transition-all ${
+                        activo
+                          ? 'border-primario/60 bg-primario/15 text-white'
+                          : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+                      }`}
+                    >
+                      <Icon className={`h-4 w-4 ${activo ? 'text-primario' : ''}`} />
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+              {metodoPago !== 'online' && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-amber-300">
+                  <Clock className="mt-0.5 h-3 w-3 shrink-0" />
+                  Pagarás al recibir la carga. Si no regularizas el pago, tu cuenta quedará restringida.
+                </p>
+              )}
+            </div>
+
             {error && (
               <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">{error}</div>
             )}
@@ -294,9 +375,10 @@ export default function WizardSolicitud(props: WizardProps) {
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setPaso(2)}
-                className="rounded-xl border border-white/15 bg-white/5 py-3 font-medium text-slate-300 transition-colors hover:text-white"
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-white/5 py-3 font-medium text-slate-300 transition-colors hover:text-white"
               >
-                Volver
+                <ArrowLeft className="h-4 w-4" />
+                Atrás
               </button>
               <button
                 onClick={onConfirmar}

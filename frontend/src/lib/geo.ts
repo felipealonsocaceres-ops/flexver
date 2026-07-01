@@ -22,9 +22,12 @@ export interface SugerenciaDireccion {
 
 // Feature GeoJSON de una ruta (LineString). Tipo local porque el proyecto no
 // tiene instalado @types/geojson y así evitamos depender del namespace global.
+// `properties` transporta la telemetría real de Mapbox Directions:
+//   - duration: duración estimada del trayecto en segundos.
+//   - distance: distancia total de la ruta en metros.
 export type RutaFeature = {
   type: 'Feature'
-  properties: Record<string, unknown>
+  properties: { duration?: number; distance?: number } & Record<string, unknown>
   geometry: { type: 'LineString'; coordinates: [number, number][] }
 }
 
@@ -68,24 +71,75 @@ export async function reverseGeocode(lng: number, lat: number): Promise<string |
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Directions API: ruta real (siguiendo calles) entre origen y destino.       */
-/*  Devuelve null si falla; el llamador decide el respaldo (línea recta).       */
+/*  Directions API con múltiples puntos (waypoints): traza UNA sola línea        */
+/*  continua que pasa, en orden, por cada coordenada entregada.                  */
+/*  Ej: [conductor, origen, destino] => camión -> recogida -> entrega.           */
+/*  Devuelve null si falla; el llamador decide el respaldo (línea recta).        */
 /* -------------------------------------------------------------------------- */
-export async function obtenerRutaGeoJSON(
-  origen: [number, number],
-  destino: [number, number],
+export async function obtenerRutaMultiPunto(
+  puntos: [number, number][],
 ): Promise<RutaFeature | null> {
+  if (puntos.length < 2) return null
   try {
-    const coords = `${origen[0]},${origen[1]};${destino[0]},${destino[1]}`
+    const coords = puntos.map(([lng, lat]) => `${lng},${lat}`).join(';')
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?geometries=geojson&overview=full&access_token=${TOKEN}`
     const res = await fetch(url)
     const data = await res.json()
     if (!data.routes?.[0]) return null
-    return { type: 'Feature', properties: {}, geometry: data.routes[0].geometry }
+    const ruta = data.routes[0]
+    // Conservamos duration (s) y distance (m) reales para el ETA dinámico.
+    return {
+      type: 'Feature',
+      properties: { duration: ruta.duration, distance: ruta.distance },
+      geometry: ruta.geometry,
+    }
   } catch (e) {
     console.error('Directions API falló:', e)
     return null
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Directions API: ruta real (siguiendo calles) entre origen y destino.        */
+/*  Atajo de dos puntos sobre obtenerRutaMultiPunto.                             */
+/* -------------------------------------------------------------------------- */
+export function obtenerRutaGeoJSON(
+  origen: [number, number],
+  destino: [number, number],
+): Promise<RutaFeature | null> {
+  return obtenerRutaMultiPunto([origen, destino])
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Geolocalización del dispositivo: Promesa sobre navigator.geolocation.        */
+/*  Traduce los códigos de error del navegador a mensajes legibles en español    */
+/*  para que la UI pueda mostrarlos de forma elegante.                           */
+/* -------------------------------------------------------------------------- */
+export interface UbicacionActual {
+  lng: number
+  lat: number
+}
+
+export function obtenerUbicacionActual(): Promise<UbicacionActual> {
+  return new Promise((resolve, reject) => {
+    if (!('geolocation' in navigator)) {
+      reject(new Error('Tu navegador no soporta geolocalización.'))
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lng: pos.coords.longitude, lat: pos.coords.latitude }),
+      (err) => {
+        // GeolocationPositionError: 1=PERMISSION_DENIED, 2=POSITION_UNAVAILABLE, 3=TIMEOUT
+        const mensajes: Record<number, string> = {
+          1: 'Permiso de ubicación denegado. Actívalo en tu navegador.',
+          2: 'No pudimos determinar tu ubicación. Revisa tu señal GPS.',
+          3: 'La búsqueda de ubicación tardó demasiado. Inténtalo de nuevo.',
+        }
+        reject(new Error(mensajes[err.code] ?? 'No se pudo obtener tu ubicación.'))
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    )
+  })
 }
 
 /* -------------------------------------------------------------------------- */

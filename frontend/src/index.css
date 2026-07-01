@@ -29,6 +29,10 @@
   );
   background-size: 300% 300%;
   animation: auroraShift 22s ease-in-out infinite;
+  /* Promovemos la capa al GPU: descarga la animación del hilo principal
+     (compositor) y evita repaints costosos durante el scroll/render. */
+  will-change: transform, opacity;
+  transform: translateZ(0);
 }
 
 /* Haz cónico girando: barre la pantalla con luces violeta/azul. */
@@ -50,6 +54,12 @@
   );
   filter: blur(50px);
   animation: auroraRotate 38s linear infinite;
+  /* Capa propia en el GPU: la rotación continua se compone sin tocar el
+     hilo principal de renderizado (clave para el TBT). Mantenemos el
+     translate(-50%,-50%) de centrado para no romper el layout cuando la
+     animación se desactiva (prefers-reduced-motion). */
+  will-change: transform, opacity;
+  transform: translate(-50%, -50%) translateZ(0);
 }
 
 /* Respetamos a quienes prefieren menos movimiento. */

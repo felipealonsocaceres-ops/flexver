@@ -4,6 +4,12 @@ import { Mail, Lock, AlertCircle, LogIn, Loader2, ShieldAlert } from 'lucide-rea
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import { POLICY_VERSION, getMisConsentimientos, registrarConsentimiento } from '../lib/privacy'
+import TurnstileWidget from '../components/auth/TurnstileWidget'
+import AuthDivider from '../components/auth/AuthDivider'
+import GoogleAuthButton from '../components/auth/GoogleAuthButton'
+
+// Clave de localStorage donde recordamos el email cuando el usuario lo pide.
+const RECORDAR_EMAIL_KEY = 'flexver:recordar-email'
 
 // ── Sistema de diseño compartido (Deep Dark Tech Premium) ────────────────────
 // Mantiene consistencia visual exacta con la pantalla de Registro.
@@ -99,10 +105,16 @@ function FloatingField({ id, label, icon: Icon, value, onChange, ...rest }: Floa
 
 export default function Login() {
   const navigate = useNavigate()
-  const [email, setEmail] = useState('')
+  // Precargamos el email recordado (si el usuario lo guardó en una visita previa).
+  const [email, setEmail] = useState(() => localStorage.getItem(RECORDAR_EMAIL_KEY) ?? '')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
   const [loading, setLoading] = useState(false)
+  // "Recordar mi cuenta": arranca activo si ya había un email guardado.
+  const [recordar, setRecordar] = useState(() => Boolean(localStorage.getItem(RECORDAR_EMAIL_KEY)))
+  // Token de Cloudflare Turnstile: hasta tenerlo, el botón queda bloqueado.
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
   // Re-consentimiento: si la política avanzó respecto de la versión aceptada.
   const [reconsent, setReconsent] = useState(false)
   const [reconsentLoading, setReconsentLoading] = useState(false)
@@ -110,6 +122,18 @@ export default function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
+    // Defensa anti-bot: sin token de Turnstile no seguimos (el botón también
+    // está deshabilitado, esto cubre cualquier envío programático).
+    if (!turnstileToken) {
+      setError('Completa la verificación de seguridad para continuar.')
+      return
+    }
+
+    // Persistimos (o limpiamos) el email recordado según el checkbox.
+    if (recordar) localStorage.setItem(RECORDAR_EMAIL_KEY, email)
+    else localStorage.removeItem(RECORDAR_EMAIL_KEY)
+
     setLoading(true)
 
     try {
@@ -140,6 +164,25 @@ export default function Login() {
     } finally {
       // Pase lo que pase (éxito o error) el spinner se apaga.
       setLoading(false)
+    }
+  }
+
+  // Recuperación de contraseña: Supabase envía el correo con el enlace de reseteo.
+  const handleOlvidePassword = async () => {
+    setError('')
+    setInfo('')
+    if (!email) {
+      setError('Escribe tu correo arriba y vuelve a tocar “¿Olvidaste tu contraseña?”.')
+      return
+    }
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/login`,
+      })
+      if (resetError) throw resetError
+      setInfo('Si el correo existe, te enviamos un enlace para restablecer tu contraseña.')
+    } catch {
+      setError('No pudimos enviar el correo de recuperación. Inténtalo nuevamente.')
     }
   }
 
@@ -198,6 +241,26 @@ export default function Login() {
             required
           />
 
+          {/* Recordar cuenta + recuperación de contraseña, en una sola fila */}
+          <div className="flex items-center justify-between gap-2 -mt-1">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300 select-none">
+              <input
+                type="checkbox"
+                checked={recordar}
+                onChange={(e) => setRecordar(e.target.checked)}
+                className="h-4 w-4 shrink-0 rounded accent-primario"
+              />
+              Recordar mi cuenta
+            </label>
+            <button
+              type="button"
+              onClick={handleOlvidePassword}
+              className="text-sm text-primario hover:underline"
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+          </div>
+
           {/* Aviso de política actualizada: re-consentimiento requerido */}
           <AnimatePresence>
             {reconsent && (
@@ -240,11 +303,21 @@ export default function Login() {
             </motion.div>
           )}
 
+          {info && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-2 text-emerald-200 text-sm bg-emerald-950/30 p-3 rounded-lg border border-emerald-900/60">
+              <ShieldAlert className="h-4 w-4 shrink-0 text-emerald-300" />
+              <span>{info}</span>
+            </motion.div>
+          )}
+
+          {/* Anti-bot Cloudflare Turnstile: bloquea el submit hasta obtener token */}
+          <TurnstileWidget onVerify={setTurnstileToken} />
+
           <motion.button
             type="submit"
-            disabled={loading}
-            whileHover={{ scale: loading ? 1 : 1.02 }}
-            whileTap={{ scale: loading ? 1 : 0.98 }}
+            disabled={loading || !turnstileToken}
+            whileHover={{ scale: loading || !turnstileToken ? 1 : 1.02 }}
+            whileTap={{ scale: loading || !turnstileToken ? 1 : 0.98 }}
             className="group relative w-full flex items-center justify-center gap-2 overflow-hidden rounded-xl py-3 font-bold text-white mt-2 bg-linear-to-r from-primario to-secundario shadow-lg shadow-primario/25 transition-all hover:shadow-primario/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primario/60 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
           >
             <span className="pointer-events-none absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
@@ -261,6 +334,16 @@ export default function Login() {
             )}
           </motion.button>
         </form>
+
+        {/* ── Social login ─────────────────────────────────────────────── */}
+        <div className="mt-5 flex flex-col gap-4">
+          <AuthDivider />
+          <GoogleAuthButton
+            label="Continuar con Google"
+            redirectTo="/home"
+            onError={setError}
+          />
+        </div>
 
         <div className="mt-6 text-center">
           <p className="text-slate-400 text-sm">

@@ -3,6 +3,9 @@ import { useNavigate, Link } from 'react-router-dom'
 import { User, Mail, Lock, Phone, AlertCircle, Truck, Store, UploadCloud, IdCard, ShieldCheck, Loader2, ScanFace, FileText, Car, Lock as LockIcon } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { POLICY_VERSION } from '../lib/privacy'
+import TurnstileWidget from '../components/auth/TurnstileWidget'
+import AuthDivider from '../components/auth/AuthDivider'
+import GoogleAuthButton from '../components/auth/GoogleAuthButton'
 
 // Cero hardcodeo: la URL del backend vive en una variable de entorno.
 // El fallback a localhost es solo una comodidad para desarrollo local.
@@ -35,6 +38,32 @@ const formatRUT = (value: string): string => {
 
   const cuerpoConPuntos = cuerpo.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
   return `${cuerpoConPuntos}-${dv}`
+}
+
+// Valida un RUT chileno con el algoritmo Módulo 11. Recibe el RUT en cualquier
+// formato (con o sin puntos/guion) y confirma que el dígito verificador coincide
+// con el cálculo, evitando así el 500 del backend por un DV incorrecto.
+const validarRUT = (value: string): boolean => {
+  const limpio = value.replace(/[^0-9kK]/g, '').toUpperCase()
+  // Necesitamos al menos un dígito de cuerpo + el dígito verificador.
+  if (limpio.length < 2) return false
+
+  const cuerpo = limpio.slice(0, -1)
+  const dv = limpio.slice(-1)
+  // El cuerpo debe ser puramente numérico (la K solo es válida como DV).
+  if (!/^\d+$/.test(cuerpo)) return false
+
+  // Suma ponderada de derecha a izquierda con la serie 2,3,4,5,6,7 (cíclica).
+  let suma = 0
+  let multiplicador = 2
+  for (let i = cuerpo.length - 1; i >= 0; i--) {
+    suma += Number(cuerpo[i]) * multiplicador
+    multiplicador = multiplicador === 7 ? 2 : multiplicador + 1
+  }
+
+  const resto = 11 - (suma % 11)
+  const dvCalculado = resto === 11 ? '0' : resto === 10 ? 'K' : String(resto)
+  return dv === dvCalculado
 }
 
 // Garantiza el prefijo +56 9 y agrupa el resto: +56 9 XXXX XXXX
@@ -208,6 +237,8 @@ export default function Register() {
   const [rol, setRol] = useState<'cliente' | 'conductor'>('cliente')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Token de Cloudflare Turnstile: bloquea "Crear cuenta" hasta resolver el reto.
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
 
   // Consentimiento: términos OBLIGATORIO (bloquea el botón) + marketing OPCIONAL
   // apagado por defecto (nunca premarcado).
@@ -224,6 +255,10 @@ export default function Register() {
   const fuerza = evaluarPassword(password)
   const passwordDebil = password.length === 0 || fuerza.nivel === 'debil'
 
+  // El RUT solo se pide al conductor. Marcamos inválido solo cuando el usuario ya
+  // escribió algo, para no mostrar error en un campo aún vacío.
+  const rutInvalido = rol === 'conductor' && rut.length > 0 && !validarRUT(rut)
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
@@ -231,6 +266,18 @@ export default function Register() {
     // El consentimiento contractual es condición de registro.
     if (!aceptaTerminos) {
       setError('Debes aceptar los Términos y la Política de Privacidad para continuar.')
+      return
+    }
+
+    // Defensa anti-bot: exigimos el token de Turnstile antes de crear la cuenta.
+    if (!turnstileToken) {
+      setError('Completa la verificación de seguridad para continuar.')
+      return
+    }
+
+    // Validación Módulo 11 en cliente: evita el 500 del backend por un DV incorrecto.
+    if (rol === 'conductor' && !validarRUT(rut)) {
+      setError('El RUT ingresado no es válido')
       return
     }
     setLoading(true)
@@ -423,7 +470,13 @@ export default function Register() {
               >
 
                 <div className="mb-1">
-                  <FloatingField id="reg-rut" label="RUT (ej: 12.345.678-5)" icon={IdCard} type="text" value={rut} onChange={(e) => setRut(formatRUT(e.target.value))} required />
+                  <FloatingField id="reg-rut" label="RUT (ej: 12.345.678-5)" icon={IdCard} type="text" value={rut} onChange={(e) => setRut(formatRUT(e.target.value))} required aria-invalid={rutInvalido} aria-describedby={rutInvalido ? 'reg-rut-error' : undefined} />
+                  {rutInvalido && (
+                    <p id="reg-rut-error" className="mt-1.5 flex items-center gap-1.5 text-xs text-terciario">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      El RUT ingresado no es válido
+                    </p>
+                  )}
                 </div>
 
                 {/* Minimización del padrón: solo los campos necesarios. */}
@@ -500,11 +553,14 @@ export default function Register() {
             )}
           </AnimatePresence>
 
+          {/* Anti-bot Cloudflare Turnstile: bloquea "Crear cuenta" hasta el token */}
+          <TurnstileWidget onVerify={setTurnstileToken} />
+
           <motion.button
             type="submit"
-            disabled={loading || passwordDebil || !aceptaTerminos}
-            whileHover={{ scale: loading || passwordDebil || !aceptaTerminos ? 1 : 1.02 }}
-            whileTap={{ scale: loading || passwordDebil || !aceptaTerminos ? 1 : 0.98 }}
+            disabled={loading || passwordDebil || !aceptaTerminos || !turnstileToken || rutInvalido}
+            whileHover={{ scale: loading || passwordDebil || !aceptaTerminos || !turnstileToken || rutInvalido ? 1 : 1.02 }}
+            whileTap={{ scale: loading || passwordDebil || !aceptaTerminos || !turnstileToken || rutInvalido ? 1 : 0.98 }}
             className="group relative w-full flex items-center justify-center gap-2 overflow-hidden rounded-xl py-3 font-bold text-white mt-2 bg-linear-to-r from-primario to-secundario shadow-lg shadow-primario/25 transition-all hover:shadow-primario/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primario/60 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
           >
             <span className="pointer-events-none absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
@@ -527,6 +583,20 @@ export default function Register() {
             </p>
           )}
         </form>
+
+        {/* ── Social login ─────────────────────────────────────────────── */}
+        <div className="mt-5 flex flex-col gap-4">
+          <AuthDivider />
+          <GoogleAuthButton
+            label="Registrarse con Google"
+            redirectTo="/home"
+            onError={setError}
+          />
+          <p className="text-center text-[11px] text-slate-500">
+            El alta con Google crea una cuenta de <span className="font-semibold text-slate-400">Cliente</span>.
+            Para registrarte como Conductor usa el formulario con tus documentos.
+          </p>
+        </div>
 
         <div className="mt-6 text-center">
           <p className="text-slate-400 text-sm">

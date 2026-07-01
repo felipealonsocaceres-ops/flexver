@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback, memo } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import Map, {
@@ -7,6 +7,7 @@ import Map, {
   Layer,
   type ViewStateChangeEvent,
 } from 'react-map-gl/mapbox'
+import type { LineLayerSpecification } from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -26,12 +27,26 @@ import {
   KeyRound,
   X,
   Flag,
+  Wallet,
+  Radar,
+  Loader2,
+  Clock,
+  Coffee,
 } from 'lucide-react'
 import DashboardVista from '../components/panel/DashboardVista'
 import MetricasVista from '../components/panel/MetricasVista'
 import VehiculoVista from '../components/panel/VehiculoVista'
+import RadarRetorno from '../components/premium/RadarRetorno'
+import AlertaCarga from '../components/premium/AlertaCarga'
+import BilleteraInteligente from '../components/premium/BilleteraInteligente'
+import EtaCard from '../components/premium/EtaCard'
 import { toast } from 'sonner'
-import { obtenerRutaGeoJSON, calcularDistanciaKm, type RutaFeature } from '../lib/geo'
+import {
+  obtenerRutaMultiPunto,
+  obtenerUbicacionActual,
+  calcularDistanciaKm,
+  type RutaFeature,
+} from '../lib/geo'
 import { codigoDeFlete } from '../lib/codigoEntrega'
 import { celebrar } from '../lib/celebrar'
 import OnboardingGuard from '../components/privacy/OnboardingGuard'
@@ -79,6 +94,7 @@ const NAV_ITEMS: NavItemConfig[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'metricas', label: 'Mis Métricas', icon: BarChart3 },
   { id: 'vehiculo', label: 'Mi Vehículo', icon: Truck },
+  { id: 'finanzas', label: 'Mis Finanzas', icon: Wallet },
   { id: 'ajustes', label: 'Ajustes', icon: Settings },
 ]
 
@@ -125,14 +141,20 @@ function NavItem({
 /*  Sub-componente: contenido de control (compartido sidebar / bottom sheet)    */
 /* -------------------------------------------------------------------------- */
 
-function ControlContent({
+// React.memo: el panel de control no necesita re-renderizarse por cambios de
+// estado ajenos (p. ej. el viewState del mapa). Solo reacciona a sus props.
+const ControlContent = memo(function ControlContent({
   isOnline,
   onToggleOnline,
   truckLocation,
+  onUsarMiUbicacion,
+  ubicandoGps,
 }: {
   isOnline: boolean
   onToggleOnline: () => void
   truckLocation: LngLat
+  onUsarMiUbicacion: () => void
+  ubicandoGps: boolean
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -176,16 +198,24 @@ function ControlContent({
           <div className="min-w-0">
             <h3 className="text-sm font-medium text-slate-200">Ubicación Actual</h3>
             <p className="mt-1 text-xs text-slate-400">
-              {isOnline
-                ? `${truckLocation.latitude.toFixed(4)}, ${truckLocation.longitude.toFixed(4)}`
-                : 'Esperando señal GPS...'}
+              {`${truckLocation.latitude.toFixed(4)}, ${truckLocation.longitude.toFixed(4)}`}
             </p>
           </div>
         </div>
+
+        {/* Botón "Usar mi ubicación actual" (radar): GPS real del dispositivo. */}
+        <button
+          onClick={onUsarMiUbicacion}
+          disabled={ubicandoGps}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/10 py-2.5 text-sm font-medium text-cyan-300 transition-colors hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {ubicandoGps ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}
+          {ubicandoGps ? 'Localizando…' : 'Usar mi ubicación actual'}
+        </button>
       </div>
     </div>
   )
-}
+})
 
 /* -------------------------------------------------------------------------- */
 /*  Sub-componente: marcador del vehículo (ubicación en tiempo real)            */
@@ -193,7 +223,10 @@ function ControlContent({
 /*  dar la sensación de posición en vivo.                                        */
 /* -------------------------------------------------------------------------- */
 
-function VehicleMarker({ location }: { location: LngLat }) {
+// React.memo: el marcador del camión solo se re-renderiza cuando cambia su
+// posición (prop `location`). Así, al arrastrar el mapa (onMove dispara muchos
+// renders/seg del panel) Mapbox NO vacía ni re-llena el buffer de este Marker.
+const VehicleMarker = memo(function VehicleMarker({ location }: { location: LngLat }) {
   return (
     <Marker longitude={location.longitude} latitude={location.latitude} anchor="center">
       <div className="relative flex items-center justify-center">
@@ -207,7 +240,23 @@ function VehicleMarker({ location }: { location: LngLat }) {
       </div>
     </Marker>
   )
-}
+})
+
+// React.memo: marcadores de origen/destino del flete. La referencia de `flete`
+// (objeto en estado) es estable entre renders, así que al mover el mapa estos
+// pines no se re-montan y el GPU no re-bufferiza.
+const MarcadoresFlete = memo(function MarcadoresFlete({ flete }: { flete: FleteSolicitud }) {
+  return (
+    <>
+      <Marker longitude={flete.origen_lng} latitude={flete.origen_lat} anchor="bottom">
+        <MapPin className="h-8 w-8 fill-emerald-400/30 text-emerald-400 drop-shadow-lg" />
+      </Marker>
+      <Marker longitude={flete.destino_lng} latitude={flete.destino_lat} anchor="bottom">
+        <MapPin className="h-8 w-8 fill-red-400/30 text-red-400 drop-shadow-lg" />
+      </Marker>
+    </>
+  )
+})
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                     */
@@ -220,6 +269,78 @@ function formatearCLP(monto: number): string {
     currency: 'CLP',
     maximumFractionDigits: 0,
   }).format(monto)
+}
+
+// Formatea los minutos de jornada acumulados a "Xh Ym" (ej. 165 -> "2h 45m").
+function formatearJornada(minutos: number): string {
+  const h = Math.floor(minutos / 60)
+  const m = minutos % 60
+  return `${h}h ${m.toString().padStart(2, '0')}m`
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Sub-componente: indicador de Jornada (Cronómetro de Seguridad / Bienestar)  */
+/* -------------------------------------------------------------------------- */
+
+// React.memo: solo se re-renderiza cuando cambia el minuto mostrado. Está aislado
+// del mapa, por lo que el tick por segundo NO toca las capas/markers de Mapbox ni
+// rompe la optimización por GPU (data/paint/layout mantienen referencias estables).
+const IndicadorJornada = memo(function IndicadorJornada({ minutos }: { minutos: number }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-white/15 bg-white/10 px-3 py-2.5 backdrop-blur-md">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-cyan-400/15">
+        <Clock className="h-4 w-4 text-cyan-300" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Jornada de conducción</p>
+        <p className="text-sm font-bold text-white">🕒 Jornada: {formatearJornada(minutos)}</p>
+      </div>
+    </div>
+  )
+})
+
+/* -------------------------------------------------------------------------- */
+/*  Sub-componente: modal de bienestar (Prevención de Fatiga — Leyes de Tránsito) */
+/* -------------------------------------------------------------------------- */
+
+function ModalDescanso({ onCerrar }: { onCerrar: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-60 flex transform-gpu items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+    >
+      <motion.div
+        initial={{ scale: 0.92, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.92, y: 20 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 26 }}
+        className="w-full max-w-sm transform-gpu rounded-2xl border border-amber-300/20 bg-slate-900/90 p-6 shadow-2xl shadow-black/60 backdrop-blur-xl"
+      >
+        <div className="mb-4 flex items-center gap-3">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-amber-400/15">
+            <Coffee className="h-6 w-6 text-amber-300" />
+          </span>
+          <div>
+            <h3 className="text-base font-bold text-white">💡 Recomendación de Descanso</h3>
+            <p className="text-xs text-slate-400">Tu bienestar es primero</p>
+          </div>
+        </div>
+        <p className="text-sm leading-relaxed text-slate-300">
+          Ha completado su ruta con éxito. Recuerde que la normativa legal prohíbe conducir más de 4 horas
+          continuas. Le sugerimos realizar una pausa activa de 15 minutos fuera del vehículo para evitar la
+          fatiga y cuidar su salud lumbar.
+        </p>
+        <button
+          onClick={onCerrar}
+          className="mt-5 w-full rounded-xl bg-linear-to-r from-amber-500 to-orange-500 py-3 font-bold text-white shadow-lg shadow-amber-500/20 transition-opacity hover:opacity-90"
+        >
+          Entendido, tomaré una pausa
+        </button>
+      </motion.div>
+    </motion.div>
+  )
 }
 
 
@@ -249,7 +370,7 @@ function TarjetaNuevaSolicitud({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 40, scale: 0.95 }}
       transition={{ type: 'spring', stiffness: 300, damping: 28 }}
-      className="absolute bottom-6 left-1/2 z-50 w-[92%] max-w-md -translate-x-1/2 rounded-2xl border border-white/20 bg-slate-900/70 p-5 shadow-2xl shadow-black/50 backdrop-blur-md backdrop-saturate-150"
+      className="absolute bottom-6 left-1/2 z-50 w-[92%] max-w-md -translate-x-1/2 transform-gpu rounded-2xl border border-white/20 bg-slate-900/70 p-5 shadow-2xl shadow-black/50 backdrop-blur-md backdrop-saturate-150"
     >
       {/* Encabezado */}
       <div className="mb-4 flex items-center justify-between">
@@ -325,7 +446,7 @@ function TarjetaViajeActivo({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 40, scale: 0.95 }}
       transition={{ type: 'spring', stiffness: 300, damping: 28 }}
-      className="absolute bottom-6 left-1/2 z-50 w-[92%] max-w-md -translate-x-1/2 rounded-2xl border border-white/20 bg-slate-900/70 p-5 shadow-2xl shadow-black/50 backdrop-blur-md backdrop-saturate-150"
+      className="absolute bottom-6 left-1/2 z-50 w-[92%] max-w-md -translate-x-1/2 transform-gpu rounded-2xl border border-white/20 bg-slate-900/70 p-5 shadow-2xl shadow-black/50 backdrop-blur-md backdrop-saturate-150"
     >
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -392,13 +513,13 @@ function ModalCodigo({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="absolute inset-0 z-60 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="absolute inset-0 z-60 flex transform-gpu items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
     >
       <motion.div
         initial={{ scale: 0.92, y: 20 }}
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.92, y: 20 }}
-        className="w-full max-w-sm rounded-2xl border border-white/15 bg-slate-900/90 p-6 shadow-2xl shadow-black/60 backdrop-blur-xl"
+        className="w-full max-w-sm transform-gpu rounded-2xl border border-white/15 bg-slate-900/90 p-6 shadow-2xl shadow-black/60 backdrop-blur-xl"
       >
         <div className="mb-4 flex items-start justify-between">
           <div className="flex items-center gap-2">
@@ -478,6 +599,10 @@ export default function PanelConductor() {
 
   const [isOnline, setIsOnline] = useState(false)
   const [activeNav, setActiveNav] = useState('mapa')
+  // Ubicación del conductor: arranca simulada (INITIAL_TRUCK) y se reemplaza por
+  // el GPS real al pulsar "Usar mi ubicación actual". Es el primer punto de la ruta.
+  const [truckLocation, setTruckLocation] = useState<LngLat>(INITIAL_TRUCK)
+  const [ubicandoGps, setUbicandoGps] = useState(false)
   const [nuevoFlete, setNuevoFlete] = useState<FleteSolicitud | null>(null)
   // El viaje que el conductor ya aceptó. No se borra al cerrar la oferta.
   const [viajeActivo, setViajeActivo] = useState<FleteSolicitud | null>(null)
@@ -493,12 +618,74 @@ export default function PanelConductor() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [sheetOpen, setSheetOpen] = useState(true)
 
+  // Funciones premium: billetera (drawer) y radar de retorno (modal post-viaje).
+  const [finanzasOpen, setFinanzasOpen] = useState(false)
+  const [radarRetornoOpen, setRadarRetornoOpen] = useState(false)
+
+  // Cronómetro de Jornada (Módulo de Bienestar): minutos acumulados de conducción.
+  // Demo acelerada: cada segundo real = 1 minuto simulado de jornada.
+  const [tiempoConduccion, setTiempoConduccion] = useState(0)
+  // Modal de prevención de fatiga, tras finalizar un viaje con éxito.
+  const [descansoOpen, setDescansoOpen] = useState(false)
+
   const [viewState, setViewState] = useState({
     longitude: INITIAL_TRUCK.longitude,
     latitude: INITIAL_TRUCK.latitude,
     zoom: 14.5,
     pitch: 45, // Inclinación para efecto 3D
   })
+
+  // useMemo: estilo de la capa de la ruta. Su referencia es estable, así que
+  // react-map-gl no re-evalúa layout/paint en cada render disparado por onMove.
+  const rutaLayout = useMemo<LineLayerSpecification['layout']>(
+    () => ({ 'line-cap': 'round', 'line-join': 'round' }),
+    [],
+  )
+  const rutaPaint = useMemo<LineLayerSpecification['paint']>(
+    () => ({ 'line-color': '#22d3ee', 'line-width': 5, 'line-opacity': 0.85 }),
+    [],
+  )
+
+  // GPS real del dispositivo: actualiza la posición del camión y recentra el mapa.
+  // La ruta del flete se recalcula sola (truckLocation es dependencia del efecto).
+  // useCallback: identidad estable -> el ControlContent memoizado no se re-renderiza
+  // por culpa de este handler en cada render del panel.
+  const handleUsarMiUbicacion = useCallback(async () => {
+    setUbicandoGps(true)
+    try {
+      const { lng, lat } = await obtenerUbicacionActual()
+      setTruckLocation({ longitude: lng, latitude: lat })
+      setViewState((v) => ({ ...v, longitude: lng, latitude: lat }))
+      toast.success('Ubicación GPS actualizada 📍')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo obtener tu ubicación.')
+    } finally {
+      setUbicandoGps(false)
+    }
+  }, [])
+
+  // Toggle online/offline con identidad estable (alimenta ControlContent memoizado).
+  const handleToggleOnline = useCallback(() => setIsOnline((v) => !v), [])
+
+  // ---------------------------------------------------------------------------
+  // Cronómetro de Jornada (Cronómetro de Seguridad): corre mientras el conductor
+  // está en línea o tiene un viaje activo. Acumula (no se reinicia al
+  // desconectarse), reflejando el total de horas/minutos de la jornada.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isOnline && !viajeActivo) return
+    const id = setInterval(() => setTiempoConduccion((min) => min + 1), 1000)
+    return () => clearInterval(id)
+  }, [isOnline, viajeActivo])
+
+  // "Mis Finanzas" abre un drawer en vez de cambiar la vista del mapa.
+  const handleNav = (id: string) => {
+    if (id === 'finanzas') {
+      setFinanzasOpen(true)
+      return
+    }
+    setActiveNav(id)
+  }
 
   // ---------------------------------------------------------------------------
   // Realtime: escucha de solicitudes de flete pagadas (Supabase)
@@ -551,10 +738,13 @@ export default function PanelConductor() {
         if (!cancelado) setRuta(null)
         return
       }
-      const r = await obtenerRutaGeoJSON(
+      // Ruta de 3 puntos (waypoints): una sola línea continua que nace en la
+      // ubicación del conductor, pasa por el origen (recogida) y termina en el destino.
+      const r = await obtenerRutaMultiPunto([
+        [truckLocation.longitude, truckLocation.latitude],
         [flete.origen_lng, flete.origen_lat],
         [flete.destino_lng, flete.destino_lat],
-      )
+      ])
       if (!cancelado) setRuta(r)
     }
 
@@ -562,7 +752,7 @@ export default function PanelConductor() {
     return () => {
       cancelado = true
     }
-  }, [viajeActivo, nuevoFlete, mapboxToken])
+  }, [viajeActivo, nuevoFlete, mapboxToken, truckLocation])
 
   // Acepta el viaje: hace el UPDATE en Supabase y lo deja como viaje activo.
   const handleAceptarViaje = async (flete: FleteSolicitud) => {
@@ -600,6 +790,13 @@ export default function PanelConductor() {
     setViajeActivo(flete) // 🔒 queda en pantalla (no se pierde)
     setNuevoFlete(null) // 👋 cierra la tarjeta de oferta
     toast.success('¡Viaje aceptado!', { description: 'Dirígete al punto de origen.' })
+
+    // Alerta de Conducción Segura (Leyes de Tránsito): toast flotante de cristal,
+    // 4 s en la parte superior (el Toaster global está en position="top-center").
+    toast('🚗 Conducción Segura', {
+      description: 'Maneje con precaución, respete los límites de velocidad y use el cinturón de seguridad.',
+      duration: 4000,
+    })
   }
 
   // Abre el modal de finalización (al llegar al destino).
@@ -633,6 +830,9 @@ export default function PanelConductor() {
     setCodigoError('')
     celebrar()
     toast.success('¡Viaje finalizado! 🎉', { description: 'El cobro se procesará al cliente.' })
+    // Prevención de Fatiga (Módulo de Bienestar): tarjeta de descanso al cerrar la
+    // ruta. El Radar de Retorno se ofrece después, al cerrar esta tarjeta (sin solapar).
+    setDescansoOpen(true)
   }
 
   // 🔒 GUARDIÁN DE ONBOARDING — bloqueo total hasta la aprobación.
@@ -678,40 +878,26 @@ export default function PanelConductor() {
         style={{ width: '100%', height: '100%' }}
       >
         {/* Ubicación en tiempo real del conductor (camioncito) */}
-        <VehicleMarker location={INITIAL_TRUCK} />
+        <VehicleMarker location={truckLocation} />
 
-        {/* Trazado de la ruta (origen -> destino) */}
+        {/* Trazado de la ruta (origen -> destino). El GeoJSON `ruta` vive en
+            estado: su referencia solo cambia cuando llega una ruta nueva, por lo
+            que Mapbox NO re-llena el buffer del GPU en cada render del panel. */}
         {ruta && (
           <Source id="ruta" type="geojson" data={ruta}>
-            <Layer
-              id="ruta-linea"
-              type="line"
-              layout={{ 'line-cap': 'round', 'line-join': 'round' }}
-              paint={{ 'line-color': '#22d3ee', 'line-width': 5, 'line-opacity': 0.85 }}
-            />
+            <Layer id="ruta-linea" type="line" layout={rutaLayout} paint={rutaPaint} />
           </Source>
         )}
 
-        {/* Origen y destino del flete activo o de la oferta vigente */}
-        {(() => {
-          const flete = viajeActivo ?? nuevoFlete
-          if (!flete) return null
-          return (
-            <>
-              <Marker longitude={flete.origen_lng} latitude={flete.origen_lat} anchor="bottom">
-                <MapPin className="h-8 w-8 fill-emerald-400/30 text-emerald-400 drop-shadow-lg" />
-              </Marker>
-              <Marker longitude={flete.destino_lng} latitude={flete.destino_lat} anchor="bottom">
-                <MapPin className="h-8 w-8 fill-red-400/30 text-red-400 drop-shadow-lg" />
-              </Marker>
-            </>
-          )
-        })()}
+        {/* Origen y destino del flete activo o de la oferta vigente (memoizado) */}
+        {(viajeActivo ?? nuevoFlete) && (
+          <MarcadoresFlete flete={(viajeActivo ?? nuevoFlete)!} />
+        )}
       </Map>
 
       {/* Overlay oscuro cuando está desconectado */}
       {!isOnline && (
-        <div className="pointer-events-none absolute inset-0 z-0 bg-slate-950/40 backdrop-blur-[2px] transition-all duration-500" />
+        <div className="pointer-events-none absolute inset-0 z-0 transform-gpu bg-slate-950/40 backdrop-blur-[2px] transition-all duration-500" />
       )}
 
       {/* Tarjeta flotante de nueva solicitud (Realtime) — solo si no hay viaje activo */}
@@ -731,6 +917,11 @@ export default function PanelConductor() {
       {/* Tarjeta del viaje aceptado: persiste hasta finalizar con el código */}
       <AnimatePresence>
         {viajeActivo && <TarjetaViajeActivo flete={viajeActivo} onFinalizar={handleAbrirFinalizar} />}
+      </AnimatePresence>
+
+      {/* ETA dinámico (estilo PedidosYa) — hora estimada de llegada al destino. */}
+      <AnimatePresence>
+        {viajeActivo && <EtaCard duracionSeg={ruta?.properties.duration ?? null} />}
       </AnimatePresence>
 
       {/* Modal de ingreso del código de entrega */}
@@ -769,7 +960,7 @@ export default function PanelConductor() {
         initial={false}
         animate={{ width: sidebarExpanded ? 300 : 84 }}
         transition={{ type: 'spring', stiffness: 260, damping: 30 }}
-        className="absolute bottom-4 left-4 top-4 z-20 hidden flex-col overflow-hidden rounded-2xl border border-white/20 bg-white/10 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150 md:flex"
+        className="absolute bottom-4 left-4 top-4 z-20 hidden transform-gpu flex-col overflow-hidden rounded-2xl border border-white/20 bg-white/10 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150 md:flex"
       >
         {/* Encabezado: marca + botón expandir / contraer */}
         <div className="flex items-center gap-3 border-b border-white/10 p-3">
@@ -800,7 +991,7 @@ export default function PanelConductor() {
               item={item}
               active={activeNav === item.id}
               expanded={sidebarExpanded}
-              onClick={() => setActiveNav(item.id)}
+              onClick={() => handleNav(item.id)}
             />
           ))}
         </nav>
@@ -815,10 +1006,18 @@ export default function PanelConductor() {
               transition={{ duration: 0.2 }}
               className="flex-1 overflow-y-auto border-t border-white/10 p-5"
             >
+              {/* Cronómetro de Seguridad — visible mientras el conductor trabaja */}
+              {(isOnline || viajeActivo) && (
+                <div className="mb-5">
+                  <IndicadorJornada minutos={tiempoConduccion} />
+                </div>
+              )}
               <ControlContent
                 isOnline={isOnline}
-                onToggleOnline={() => setIsOnline((v) => !v)}
-                truckLocation={INITIAL_TRUCK}
+                onToggleOnline={handleToggleOnline}
+                truckLocation={truckLocation}
+                onUsarMiUbicacion={handleUsarMiUbicacion}
+                ubicandoGps={ubicandoGps}
               />
             </motion.div>
           )}
@@ -830,14 +1029,14 @@ export default function PanelConductor() {
       {/* ===================================================================== */}
       <div className="md:hidden">
         {/* Barra de navegación inferior fija (mismo glass azulado) */}
-        <nav className="absolute inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-white/20 bg-white/10 px-2 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-2xl backdrop-saturate-150">
+        <nav className="absolute inset-x-0 bottom-0 z-30 flex transform-gpu items-center justify-around border-t border-white/20 bg-white/10 px-2 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-2xl backdrop-saturate-150">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon
             const active = activeNav === item.id
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveNav(item.id)}
+                onClick={() => handleNav(item.id)}
                 className={`flex flex-col items-center gap-1 rounded-lg px-2 py-1.5 text-[10px] transition-colors ${
                   active ? 'text-white' : 'text-slate-300'
                 }`}
@@ -861,7 +1060,7 @@ export default function PanelConductor() {
           initial={false}
           animate={{ y: sheetOpen ? 0 : 'calc(100% - 92px)' }}
           transition={{ type: 'spring', stiffness: 300, damping: 32 }}
-          className="absolute inset-x-0 bottom-17 z-20 max-h-[75vh] overflow-y-auto rounded-t-3xl border-t border-white/20 bg-white/10 p-5 pb-8 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150"
+          className="absolute inset-x-0 bottom-17 z-20 max-h-[75vh] transform-gpu overflow-y-auto rounded-t-3xl border-t border-white/20 bg-white/10 p-5 pb-8 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150"
         >
           {/* Asa de arrastre */}
           <button
@@ -871,13 +1070,52 @@ export default function PanelConductor() {
             <GripHorizontal className="h-5 w-5 text-slate-300" />
           </button>
 
+          {/* Cronómetro de Seguridad — visible mientras el conductor trabaja */}
+          {(isOnline || viajeActivo) && (
+            <div className="mb-5">
+              <IndicadorJornada minutos={tiempoConduccion} />
+            </div>
+          )}
           <ControlContent
             isOnline={isOnline}
-            onToggleOnline={() => setIsOnline((v) => !v)}
-            truckLocation={INITIAL_TRUCK}
+            onToggleOnline={handleToggleOnline}
+            truckLocation={truckLocation}
+            onUsarMiUbicacion={handleUsarMiUbicacion}
+            ubicandoGps={ubicandoGps}
           />
         </motion.div>
       </div>
+
+      {/* Recomendación de Descanso (Prevención de Fatiga) — al cerrar un viaje. */}
+      <AnimatePresence>
+        {descansoOpen && (
+          <ModalDescanso
+            onCerrar={() => {
+              setDescansoOpen(false)
+              // Tras la pausa, ofrecemos el Radar de Retorno (sin solapar modales).
+              setTimeout(() => setRadarRetornoOpen(true), 400)
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Alerta Contextual de Carga (meteorológica) — flota sobre el mapa en viaje activo. */}
+      <AlertaCarga activo={!!viajeActivo} />
+
+      {/* Radar de Retorno Inteligente — modal disparado al finalizar un viaje. */}
+      <RadarRetorno
+        open={radarRetornoOpen}
+        onCerrar={() => setRadarRetornoOpen(false)}
+        onVerFlete={() => {
+          setRadarRetornoOpen(false)
+          toast.success('Buscando fletes de retorno… 🔄', {
+            description: 'Te avisaremos cuando una carga hacia tu comuna esté lista.',
+          })
+        }}
+      />
+
+      {/* Billetera Inteligente — drawer financiero de la semana ("Mis Finanzas"). */}
+      <BilleteraInteligente open={finanzasOpen} onClose={() => setFinanzasOpen(false)} />
 
       {/* Centro de Privacidad: se abre desde el item "Ajustes" del menú. */}
       <CentroPrivacidad open={activeNav === 'ajustes'} onClose={() => setActiveNav('mapa')} />

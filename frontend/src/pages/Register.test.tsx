@@ -10,6 +10,22 @@ vi.mock('../lib/privacy', () => ({
   registrarConsentimiento: vi.fn(),
 }))
 
+// El botón de Google instancia el cliente de Supabase; lo aislamos del test.
+vi.mock('../components/auth/GoogleAuthButton', () => ({
+  default: () => null,
+}))
+
+// Turnstile no se puede resolver en jsdom; lo simulamos entregando un token al
+// montar para reproducir el "reto superado" (la Site Key de pruebas siempre aprueba).
+vi.mock('../components/auth/TurnstileWidget', async () => {
+  const { useEffect } = await import('react')
+  const MockTurnstile = ({ onVerify }: { onVerify: (t: string | null) => void }) => {
+    useEffect(() => onVerify('test-token'), [onVerify])
+    return null
+  }
+  return { default: MockTurnstile }
+})
+
 import Register from './Register'
 
 const renderRegister = () =>

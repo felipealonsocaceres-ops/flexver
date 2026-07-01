@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { CheckCircle2, PartyPopper, CreditCard, Star, Phone, UserRound } from 'lucide-react'
+import { CheckCircle2, PartyPopper, CreditCard, Star, Phone, UserRound, XCircle } from 'lucide-react'
 import { formatearPrecio } from '../../lib/calcularTarifa'
 import { codigoDeFlete } from '../../lib/codigoEntrega'
 import type { ConductorPublico } from '../../lib/api'
@@ -148,9 +148,15 @@ export default function EstadoViajeCard(props: EstadoViajeCardProps) {
       ) : (
         <button
           onClick={onCancelar}
-          className="w-full rounded-xl border border-red-500/40 bg-red-500/10 py-3 font-bold text-red-400 transition-colors hover:bg-red-500/20"
+          className={
+            estado === 'buscando_conductor'
+              ? // Botón de cristal elegante mientras se busca conductor.
+                'flex w-full items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 py-3 font-semibold text-slate-200 backdrop-blur-md transition-colors hover:border-red-400/40 hover:bg-red-500/15 hover:text-red-300'
+              : 'flex w-full items-center justify-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 py-3 font-bold text-red-400 transition-colors hover:bg-red-500/20'
+          }
         >
-          Cancelar viaje
+          <XCircle className="h-5 w-5" />
+          {estado === 'buscando_conductor' ? 'Cancelar Solicitud' : 'Cancelar viaje'}
         </button>
       )}
     </motion.div>

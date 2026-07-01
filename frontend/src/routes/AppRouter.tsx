@@ -1,22 +1,27 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import RoleGuard from './RoleGuard';
+import RouteFallback from '../components/RouteFallback';
 
-// Importación de tus páginas actuales
+// Vistas ligeras (públicas): se cargan de forma síncrona con el bundle inicial.
 import Login from '../pages/Login';
 import Register from '../pages/Register';
-import PanelCliente from '../pages/PanelCliente';
-import PanelConductor from '../pages/PanelConductor';
 import Pago from '../pages/Pago'
 import PoliticaPrivacidad from '../pages/PoliticaPrivacidad';
 
-// Panel de Administración (Centro de Comando)
-import AdminLayout from '../components/admin/AdminLayout';
-import DashboardBI from '../pages/admin/DashboardBI';
-import ValidacionKYC from '../pages/admin/ValidacionKYC';
-import GestionUsuarios from '../pages/admin/GestionUsuarios';
+/* Vistas pesadas: cargadas bajo demanda con React.lazy (Code Splitting a nivel
+   de ruta). Esto saca a Mapbox (paneles) y Recharts (DashboardBI) del bundle
+   inicial, mejorando el LCP/TBT en la primera carga. */
+const PanelCliente = lazy(() => import('../pages/PanelCliente'));
+const PanelConductor = lazy(() => import('../pages/PanelConductor'));
+const AdminLayout = lazy(() => import('../components/admin/AdminLayout'));
+const DashboardBI = lazy(() => import('../pages/admin/DashboardBI'));
+const ValidacionKYC = lazy(() => import('../pages/admin/ValidacionKYC'));
+const GestionUsuarios = lazy(() => import('../pages/admin/GestionUsuarios'));
 
 const AppRouter = () => {
   return (
+    <Suspense fallback={<RouteFallback />}>
     <Routes>
       {/* Rutas Públicas */}
       <Route path="/login" element={<Login />} />
@@ -51,6 +56,7 @@ const AppRouter = () => {
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
+    </Suspense>
   );
 };
 

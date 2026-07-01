@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Map, {
   Marker,
@@ -8,6 +8,7 @@ import Map, {
   type MapMouseEvent,
   type ViewStateChangeEvent,
 } from 'react-map-gl/mapbox'
+import type { LineLayerSpecification } from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -24,6 +25,7 @@ import {
   AlertCircle,
   GripHorizontal,
   ShieldCheck,
+  Bot,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import CentroPrivacidad from '../components/privacy/CentroPrivacidad'
@@ -42,6 +44,13 @@ import { celebrar } from '../lib/celebrar'
 import WizardSolicitud from '../components/cliente/WizardSolicitud'
 import EstadoViajeCard from '../components/cliente/EstadoViajeCard'
 import MisFletesVista from '../components/cliente/MisFletesVista'
+import ChatbotCubicacion from '../components/premium/ChatbotCubicacion'
+import WidgetClima from '../components/premium/WidgetClima'
+import EtaCard from '../components/premium/EtaCard'
+import CentroAyuda from '../components/premium/CentroAyuda'
+import BannerDeuda from '../components/premium/BannerDeuda'
+import { useDeuda, registrarDeuda, type MetodoPago } from '../lib/deuda'
+import { useUbicacionEnVivo } from '../lib/useUbicacionEnVivo'
 
 /* -------------------------------------------------------------------------- */
 /*  Navegación del sidebar                                                      */
@@ -90,7 +99,10 @@ const mapearCategoria = (m3: number): 'chica' | 'mediana' | 'grande' =>
 /* -------------------------------------------------------------------------- */
 /*  Marcador del camión (ubicación simulada en vivo)                            */
 /* -------------------------------------------------------------------------- */
-function TruckMarker({ lng, lat, bearing }: { lng: number; lat: number; bearing: number }) {
+// React.memo: el camión solo se re-renderiza cuando cambian sus props
+// primitivas (lng/lat/bearing). Mientras el cliente arrastra el mapa (onMove
+// dispara muchos renders del panel) este Marker no se re-monta -> sin re-buffer.
+const TruckMarker = memo(function TruckMarker({ lng, lat, bearing }: { lng: number; lat: number; bearing: number }) {
   return (
     <Marker longitude={lng} latitude={lat} anchor="center">
       <div className="relative flex items-center justify-center">
@@ -105,19 +117,70 @@ function TruckMarker({ lng, lat, bearing }: { lng: number; lat: number; bearing:
       </div>
     </Marker>
   )
-}
+})
+
+// Punto azul de GPS en tiempo real (estilo Google Maps): la ubicación física
+// real del cliente. React.memo + props primitivas (lng/lat): al arrastrar el
+// mapa o avanzar el camión simulado este Marker NO se re-monta -> sin re-buffer
+// del GPU. El halo "radar" usa animate-ping (composited en GPU vía transform).
+const UbicacionClienteMarker = memo(function UbicacionClienteMarker({ lng, lat }: { lng: number; lat: number }) {
+  return (
+    <Marker longitude={lng} latitude={lat} anchor="center">
+      <div className="relative flex items-center justify-center">
+        {/* Halo radar pulsante */}
+        <span className="absolute h-10 w-10 animate-ping rounded-full bg-blue-500/30" />
+        <span className="absolute h-6 w-6 rounded-full bg-blue-500/20" />
+        {/* Punto azul con borde blanco y resplandor */}
+        <span className="relative h-4 w-4 rounded-full border-2 border-white bg-blue-500 shadow-lg shadow-blue-500/50" />
+      </div>
+    </Marker>
+  )
+})
+
+// React.memo: pines de origen/destino. Reciben solo coordenadas primitivas, así
+// que no se re-renderizan al mover el mapa ni cuando avanza el camión simulado.
+const MarcadoresRuta = memo(function MarcadoresRuta({
+  origenLat,
+  origenLng,
+  destinoLat,
+  destinoLng,
+}: {
+  origenLat: number | null
+  origenLng: number | null
+  destinoLat: number | null
+  destinoLng: number | null
+}) {
+  return (
+    <>
+      {origenLat != null && origenLng != null && (
+        <Marker longitude={origenLng} latitude={origenLat} anchor="bottom">
+          <MapPin className="h-8 w-8 fill-emerald-400/30 text-emerald-400 drop-shadow-lg" />
+        </Marker>
+      )}
+      {destinoLat != null && destinoLng != null && (
+        <Marker longitude={destinoLng} latitude={destinoLat} anchor="bottom">
+          <Flag className="h-7 w-7 fill-red-400/30 text-red-400 drop-shadow-lg" />
+        </Marker>
+      )}
+    </>
+  )
+})
 
 /* -------------------------------------------------------------------------- */
 /*  Contenido de control del sidebar / bottom sheet                             */
 /* -------------------------------------------------------------------------- */
-function ControlContent({
+// React.memo: el panel de control no depende del viewState ni de la posición
+// del camión, así que no debe re-renderizarse cuando esos estados cambian rápido.
+const ControlContent = memo(function ControlContent({
   nombre,
   hayViaje,
+  bloqueado,
   onSolicitar,
   onLogout,
 }: {
   nombre: string
   hayViaje: boolean
+  bloqueado: boolean
   onSolicitar: () => void
   onLogout: () => void
 }) {
@@ -126,13 +189,18 @@ function ControlContent({
       <div>
         <h1 className="text-xl font-bold text-white">Hola, {nombre}</h1>
         <p className="mt-1 text-sm text-slate-300">
-          {hayViaje ? 'Tienes un viaje en curso.' : '¿A dónde enviamos tu carga hoy?'}
+          {bloqueado
+            ? 'Tu cuenta está restringida por un pago pendiente.'
+            : hayViaje
+              ? 'Tienes un viaje en curso.'
+              : '¿A dónde enviamos tu carga hoy?'}
         </p>
       </div>
 
       <button
         onClick={onSolicitar}
-        disabled={hayViaje}
+        disabled={hayViaje || bloqueado}
+        title={bloqueado ? 'Regulariza tu pago pendiente para volver a solicitar' : undefined}
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-linear-to-r from-primario to-secundario py-4 font-bold text-white shadow-lg shadow-primario/25 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Plus className="h-5 w-5" />
@@ -148,7 +216,7 @@ function ControlContent({
       </button>
     </div>
   )
-}
+})
 
 /* -------------------------------------------------------------------------- */
 /*  Componente principal                                                        */
@@ -161,9 +229,15 @@ export default function PanelCliente() {
 
   const [activeNav, setActiveNav] = useState<NavId>('mapa')
   const [privacidadOpen, setPrivacidadOpen] = useState(false)
+  const [ayudaOpen, setAyudaOpen] = useState(false)
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [sheetOpen, setSheetOpen] = useState(true)
   const [nombre, setNombre] = useState('Usuario')
+
+  // Método de pago elegido en el wizard. "Pago Contra Entrega" / "Pagar Después"
+  // generan una deuda al entregar el flete (flujo anti-fraude).
+  const [metodoPago, setMetodoPago] = useState<MetodoPago>('online')
+  const { deuda, regularizar } = useDeuda()
 
   const [viewState, setViewState] = useState({
     longitude: RM_CENTER[0],
@@ -171,6 +245,18 @@ export default function PanelCliente() {
     zoom: 11.5,
     pitch: 45,
   })
+
+  // useMemo: estilo de la capa de la ruta (referencia estable). El movimiento de
+  // las "marching ants" se aplica aparte vía setPaintProperty (fuera del render),
+  // así que aquí basta con no recrear layout/paint en cada render del panel.
+  const rutaLayout = useMemo<LineLayerSpecification['layout']>(
+    () => ({ 'line-cap': 'round', 'line-join': 'round' }),
+    [],
+  )
+  const rutaPaint = useMemo<LineLayerSpecification['paint']>(
+    () => ({ 'line-color': '#8B5CF6', 'line-width': 5, 'line-opacity': 0.9 }),
+    [],
+  )
 
   // --- Estado del flujo ------------------------------------------------------
   const [wizardAbierto, setWizardAbierto] = useState(false)
@@ -200,6 +286,10 @@ export default function PanelCliente() {
   const [ruta, setRuta] = useState<RutaFeature | null>(null)
   const [truckPos, setTruckPos] = useState<[number, number] | null>(null)
   const [truckBearing, setTruckBearing] = useState(0)
+
+  // Ubicación física real del cliente (GPS en vivo): "punto azul" en el mapa.
+  // Le ayuda a ubicarse antes de confirmar el origen de la ferretería.
+  const ubicacionCliente = useUbicacionEnVivo(true)
 
   // Datos reales del conductor asignado (nombre, calificación, teléfono).
   const [conductorInfo, setConductorInfo] = useState<ConductorPublico | null>(null)
@@ -254,7 +344,16 @@ export default function PanelCliente() {
     } else if (estadoViaje === 'entregado') {
       celebrar()
       toast.success('¡Viaje completado! 🎉', { description: 'Ya puedes pagar y calificar al conductor.' })
+      // Anti-fraude: si el flete se pactó "Contra Entrega"/"Pagar Después", queda
+      // una deuda pendiente que restringe la cuenta hasta regularizarla.
+      if (metodoPago !== 'online' && tarifaTotal != null) {
+        registrarDeuda(Math.round(tarifaTotal))
+        toast.error('Pago contra entrega pendiente', {
+          description: 'Tu cuenta quedó restringida hasta regularizar el pago.',
+        })
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [estadoViaje, fleteId])
 
   // Dibuja la ruta cuando hay origen + destino (en wizard o en viaje) y encuadra el mapa.
@@ -407,11 +506,30 @@ export default function PanelCliente() {
   }
 
   // --- Acciones del flujo ----------------------------------------------------
-  const abrirWizard = () => {
+  // useCallback: identidad estable -> el ControlContent memoizado no se re-renderiza
+  // por este handler cuando el panel re-renderiza (viewState / camión simulado).
+  const abrirWizard = useCallback(() => {
+    if (deuda.pendiente) {
+      toast.error('Tienes un pago pendiente', {
+        description: 'Regulariza tu deuda para volver a solicitar fletes.',
+      })
+      return
+    }
     setWizardAbierto(true)
     setActiveNav('mapa')
     setPaso(1)
     setError('')
+  }, [deuda.pendiente])
+
+  // Pre-llenado desde el asistente de cubicación (IA Logística): abre el wizard
+  // con la descripción y el volumen sugeridos; el cliente solo elige origen/destino.
+  const prellenarDesdeIA = (descripcionIA: string, volumenIA: number) => {
+    setDescripcion(descripcionIA)
+    setVolumen(volumenIA)
+    abrirWizard()
+    toast.success('Formulario pre-llenado por IA 🤖', {
+      description: 'Elige origen y destino para cotizar tu flete.',
+    })
   }
 
   const resetViaje = () => {
@@ -424,6 +542,7 @@ export default function PanelCliente() {
     setDescripcion(''); setVolumen(0); setDistancia(0)
     setDesglose(null); setTarifaTotal(null); setRuta(null); setTruckPos(null); setTruckBearing(0)
     setConductorInfo(null)
+    setMetodoPago('online')
     setViewState((v) => ({ ...v, longitude: RM_CENTER[0], latitude: RM_CENTER[1], zoom: 11.5 }))
   }
 
@@ -482,10 +601,10 @@ export default function PanelCliente() {
     }
   }
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     await supabase.auth.signOut()
     navigate('/login')
-  }
+  }, [navigate])
 
   if (!mapboxToken) {
     return (
@@ -517,29 +636,51 @@ export default function PanelCliente() {
         cursor={cursorMapa}
         style={{ width: '100%', height: '100%' }}
       >
+        {/* El GeoJSON `ruta` vive en estado: su referencia solo cambia al recalcular
+            la ruta, por lo que Mapbox no re-llena el buffer del GPU en cada render. */}
         {ruta && (
           <Source id="ruta-cliente" type="geojson" data={ruta}>
-            <Layer
-              id="ruta-cliente-linea"
-              type="line"
-              layout={{ 'line-cap': 'round', 'line-join': 'round' }}
-              paint={{ 'line-color': '#8B5CF6', 'line-width': 5, 'line-opacity': 0.9 }}
-            />
+            <Layer id="ruta-cliente-linea" type="line" layout={rutaLayout} paint={rutaPaint} />
           </Source>
         )}
 
-        {origenLat != null && origenLng != null && (
-          <Marker longitude={origenLng} latitude={origenLat} anchor="bottom">
-            <MapPin className="h-8 w-8 fill-emerald-400/30 text-emerald-400 drop-shadow-lg" />
-          </Marker>
-        )}
-        {destinoLat != null && destinoLng != null && (
-          <Marker longitude={destinoLng} latitude={destinoLat} anchor="bottom">
-            <Flag className="h-7 w-7 fill-red-400/30 text-red-400 drop-shadow-lg" />
-          </Marker>
-        )}
+        {/* Pines de origen/destino (memoizados, props primitivas) */}
+        <MarcadoresRuta
+          origenLat={origenLat}
+          origenLng={origenLng}
+          destinoLat={destinoLat}
+          destinoLng={destinoLng}
+        />
         {truckPos && <TruckMarker lng={truckPos[0]} lat={truckPos[1]} bearing={truckBearing} />}
+
+        {/* Punto azul GPS: ubicación física real del cliente, en tiempo real. */}
+        {ubicacionCliente && (
+          <UbicacionClienteMarker lng={ubicacionCliente.lng} lat={ubicacionCliente.lat} />
+        )}
       </Map>
+
+      {/* Widget de clima real (Santiago) + estado de tarifa — solo en el mapa. */}
+      {activeNav === 'mapa' && !deuda.pendiente && <WidgetClima />}
+
+      {/* ETA dinámico (estilo PedidosYa) — mientras el conductor va en camino. */}
+      <AnimatePresence>
+        {activeNav === 'mapa' && estadoViaje === 'asignado' && (
+          <EtaCard duracionSeg={ruta?.properties.duration ?? null} />
+        )}
+      </AnimatePresence>
+
+      {/* Banner anti-fraude: cuenta restringida por pago pendiente. */}
+      <AnimatePresence>
+        {deuda.pendiente && (
+          <BannerDeuda
+            monto={deuda.monto}
+            onRegularizar={() => {
+              regularizar()
+              toast.success('¡Pago regularizado! ✅', { description: 'Tu cuenta vuelve a estar activa.' })
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Vista interna "Mis Fletes" (se superpone al mapa) */}
       {activeNav === 'misfletes' && (
@@ -549,7 +690,7 @@ export default function PanelCliente() {
       )}
       {activeNav === 'ajustes' && (
         <div className="absolute inset-0 z-10 flex items-center justify-center px-4 md:pl-80">
-          <div className="w-full max-w-md rounded-3xl border border-white/15 bg-gray-900/80 p-6 text-slate-300 backdrop-blur-md">
+          <div className="w-full max-w-md transform-gpu rounded-3xl border border-white/15 bg-gray-900/80 p-6 text-slate-300 backdrop-blur-md">
             <div className="mb-5 flex items-center gap-3">
               <Settings className="h-6 w-6 text-slate-400" />
               <p className="text-lg font-semibold text-white">Ajustes</p>
@@ -566,6 +707,20 @@ export default function PanelCliente() {
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-white">Centro de Privacidad</span>
                 <span className="block text-xs text-slate-400">Gestiona tus consentimientos y revisa la política.</span>
+              </span>
+            </button>
+
+            {/* Centro de Ayuda: chatbot interactivo + soporte humano. */}
+            <button
+              onClick={() => setAyudaOpen(true)}
+              className="mt-3 flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:bg-white/10"
+            >
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-secundario to-primario">
+                <Bot className="h-5 w-5 text-white" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-white">Centro de Ayuda</span>
+                <span className="block text-xs text-slate-400">Asistente inteligente y soporte humano 24/7.</span>
               </span>
             </button>
           </div>
@@ -588,6 +743,8 @@ export default function PanelCliente() {
               setDescripcion={setDescripcion}
               volumen={volumen}
               setVolumen={setVolumen}
+              metodoPago={metodoPago}
+              setMetodoPago={setMetodoPago}
               distancia={distancia}
               cotizando={cotizando}
               desglose={desglose}
@@ -597,7 +754,7 @@ export default function PanelCliente() {
               onSeleccionarOrigen={fijarOrigen}
               onSeleccionarDestino={fijarDestino}
               onConfirmar={handleConfirmar}
-              onCerrar={() => setWizardAbierto(false)}
+              onCerrar={resetViaje}
             />
           )}
           {!wizardAbierto && hayViaje && estadoViaje && fleteId && (
@@ -624,7 +781,7 @@ export default function PanelCliente() {
         initial={false}
         animate={{ width: sidebarExpanded ? 300 : 84 }}
         transition={{ type: 'spring', stiffness: 260, damping: 30 }}
-        className="absolute bottom-4 left-4 top-4 z-20 hidden flex-col overflow-hidden rounded-2xl border border-white/20 bg-white/10 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150 md:flex"
+        className="absolute bottom-4 left-4 top-4 z-20 hidden transform-gpu flex-col overflow-hidden rounded-2xl border border-white/20 bg-white/10 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150 md:flex"
       >
         <div className="flex items-center gap-3 border-b border-white/10 p-3">
           {sidebarExpanded && (
@@ -667,7 +824,7 @@ export default function PanelCliente() {
               transition={{ duration: 0.2 }}
               className="flex-1 overflow-y-auto border-t border-white/10 p-5"
             >
-              <ControlContent nombre={nombre} hayViaje={hayViaje} onSolicitar={abrirWizard} onLogout={handleLogout} />
+              <ControlContent nombre={nombre} hayViaje={hayViaje} bloqueado={deuda.pendiente} onSolicitar={abrirWizard} onLogout={handleLogout} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -675,7 +832,7 @@ export default function PanelCliente() {
 
       {/* ===================== MÓVIL — Bottom sheet ======================= */}
       <div className="md:hidden">
-        <nav className="absolute inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-white/20 bg-white/10 px-2 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-2xl backdrop-saturate-150">
+        <nav className="absolute inset-x-0 bottom-0 z-30 flex transform-gpu items-center justify-around border-t border-white/20 bg-white/10 px-2 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-2xl backdrop-saturate-150">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon
             const active = activeNav === item.id
@@ -707,18 +864,26 @@ export default function PanelCliente() {
             initial={false}
             animate={{ y: sheetOpen ? 0 : 'calc(100% - 92px)' }}
             transition={{ type: 'spring', stiffness: 300, damping: 32 }}
-            className="absolute inset-x-0 bottom-17 z-20 max-h-[75vh] overflow-y-auto rounded-t-3xl border-t border-white/20 bg-white/10 p-5 pb-8 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150"
+            className="absolute inset-x-0 bottom-17 z-20 max-h-[75vh] transform-gpu overflow-y-auto rounded-t-3xl border-t border-white/20 bg-white/10 p-5 pb-8 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150"
           >
             <button onClick={() => setSheetOpen((v) => !v)} className="mx-auto mb-4 flex w-full flex-col items-center">
               <GripHorizontal className="h-5 w-5 text-slate-300" />
             </button>
-            <ControlContent nombre={nombre} hayViaje={hayViaje} onSolicitar={abrirWizard} onLogout={handleLogout} />
+            <ControlContent nombre={nombre} hayViaje={hayViaje} bloqueado={deuda.pendiente} onSolicitar={abrirWizard} onLogout={handleLogout} />
           </motion.div>
         )}
       </div>
 
+      {/* Asistente de Cubicación (IA Logística) — solo en la vista Mapa, sin flujo activo. */}
+      {activeNav === 'mapa' && !wizardAbierto && !hayViaje && (
+        <ChatbotCubicacion onPrellenar={prellenarDesdeIA} />
+      )}
+
       {/* Centro de Privacidad: gestión de consentimientos del cliente. */}
       <CentroPrivacidad open={privacidadOpen} onClose={() => setPrivacidadOpen(false)} />
+
+      {/* Centro de Ayuda: chatbot interactivo con motor de reglas + soporte humano. */}
+      <CentroAyuda open={ayudaOpen} onClose={() => setAyudaOpen(false)} />
     </div>
   )
 }
